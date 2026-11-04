@@ -3,8 +3,6 @@
 Go OLTP backend for the Retail Platform storefront (Postgres, Redis Streams,
 transactional outbox).
 
-- Architecture: `storefront-backend-architecture.md`
-- Delivery plan: `storefront-sprint-plan.md`
 
 ## Layout rule
 
