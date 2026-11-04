@@ -1,0 +1,21 @@
+version: "2"
+
+linters:
+  enable:
+    - depguard
+  settings:
+    depguard:
+      rules:
+        domain-stdlib-only:
+          files:
+            - "**/internal/domain/**"
+            - "!$test"
+          allow:
+            - "$gostd"
+        service-no-adapters:
+          files:
+            - "**/internal/service/**"
+            - "!$test"
+          deny:
+            - pkg: github.com/benkivuva/storefront-backend/internal/adapter
+              desc: service depends on domain ports, never adapters

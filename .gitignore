@@ -1,0 +1,13 @@
+/bin/
+/dist/
+*.test
+*.out
+coverage.txt
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.idea/
+.vscode/
+.DS_Store
