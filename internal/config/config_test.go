@@ -89,3 +89,19 @@ if c.HTTPAddr != ":8080" {
 t.Fatalf("HTTP_ADDR = %q, want :8080 (default)", c.HTTPAddr)
 }
 }
+
+func TestLoad_ShutdownPropagation(t *testing.T) {
+t.Setenv("SHUTDOWN_PROPAGATION", "0s")
+c, err := Load()
+if err != nil {
+t.Fatalf("Load(): %v", err)
+}
+if c.ShutdownPropagation != 0 {
+t.Fatalf("ShutdownPropagation = %s, want 0s", c.ShutdownPropagation)
+}
+
+t.Setenv("SHUTDOWN_PROPAGATION", "-1s")
+if _, err := Load(); err == nil {
+t.Fatalf("expected error for negative propagation")
+}
+}
