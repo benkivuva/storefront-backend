@@ -21,4 +21,4 @@ Both rules are enforced twice: by `depguard` in `.golangci.yml`, and by
     make lint   # golangci-lint
     make fmt    # gofmt -w
 
-Requires Go 1.25+ (see `go.mod`).
+Requires Go 1.26+ (see `go.mod`).

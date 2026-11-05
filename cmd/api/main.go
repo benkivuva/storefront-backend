@@ -3,9 +3,22 @@ package main
 import (
 "log/slog"
 "os"
+
+"github.com/benkivuva/storefront-backend/internal/config"
 )
 
 func main() {
-logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-logger.Info("storefront-backend api: scaffold only; HTTP server and graceful shutdown land later in Sprint 1")
+cfg, err := config.Load()
+if err != nil {
+slog.New(slog.NewJSONHandler(os.Stderr, nil)).Error("config", "err", err)
+os.Exit(1)
+}
+
+logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel}))
+logger.Info("storefront-backend api starting",
+"env", cfg.Env,
+"http_addr", cfg.HTTPAddr,
+"internal_addr", cfg.InternalAddr,
+"shutdown_timeout", cfg.ShutdownTimeout,
+)
 }
