@@ -1,11 +1,28 @@
 name: ci
+
 on:
   push:
     branches: [main]
   pull_request:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  AR_REPO: us-central1-docker.pkg.dev/retail-data-platform-511008/dev-retail-platform
+  IMAGE_NAME: storefront-backend
+  GITOPS_REPO: retail-platform-gitops
+  GITOPS_MANIFEST: apps/storefront-backend/deployment.yaml
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -13,3 +30,88 @@ jobs:
           go-version-file: go.mod
       - run: go vet ./...
       - run: go test -race -cover ./...
+
+  build-and-deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute image tag
+        run: echo "IMAGE_TAG=main-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_CI_SA }}
+          token_format: access_token
+
+      - name: Authenticate Docker to Artifact Registry
+        uses: docker/login-action@v3
+        with:
+          registry: us-central1-docker.pkg.dev
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+
+      - name: Build image
+        run: |
+          docker build \
+            -t "${AR_REPO}/${IMAGE_NAME}:${IMAGE_TAG}" \
+            -t "${AR_REPO}/${IMAGE_NAME}:main-latest" \
+            .
+
+      - name: Install Trivy
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+          trivy --version
+
+      - name: Scan for HIGH/CRITICAL vulnerabilities
+        run: |
+          trivy image \
+            --exit-code 1 \
+            --severity HIGH,CRITICAL \
+            --ignore-unfixed \
+            --no-progress \
+            "${AR_REPO}/${IMAGE_NAME}:${IMAGE_TAG}"
+
+      - name: Push image
+        run: |
+          docker push "${AR_REPO}/${IMAGE_NAME}:${IMAGE_TAG}"
+          docker push "${AR_REPO}/${IMAGE_NAME}:main-latest"
+
+      - name: Update GitOps repo
+        env:
+          GITOPS_PAT: ${{ secrets.GITOPS_PAT }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GITOPS_PAT:-}" ]; then
+            echo "::error::GITOPS_PAT secret is not set"
+            exit 1
+          fi
+          WORKDIR=$(mktemp -d)
+          git clone --depth 1 \
+            "https://x-access-token:${GITOPS_PAT}@github.com/benkivuva/${GITOPS_REPO}.git" \
+            "$WORKDIR"
+          cd "$WORKDIR"
+          if [ ! -f "${GITOPS_MANIFEST}" ]; then
+            echo "::error::${GITOPS_MANIFEST} not found in gitops repo"
+            exit 1
+          fi
+          sed -i -E "s|(image: [^ ]*/${IMAGE_NAME}):[^ ]+|\1:${IMAGE_TAG}|" "${GITOPS_MANIFEST}"
+          if ! grep -qE "image: [^ ]*/${IMAGE_NAME}:${IMAGE_TAG}$" "${GITOPS_MANIFEST}"; then
+            echo "::error::sed pattern did not match in ${GITOPS_MANIFEST}"
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "${GITOPS_MANIFEST}"
+          if git diff --cached --quiet; then
+            echo "No change to ${GITOPS_MANIFEST}; already at ${IMAGE_TAG}."
+            exit 0
+          fi
+          git commit -m "chore(${IMAGE_NAME}): bump image to ${IMAGE_TAG}"
+          git pull --rebase origin main
+          git push
