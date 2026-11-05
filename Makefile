@@ -15,3 +15,12 @@ tidy:
 
 fmt:
 > gofmt -l -w .
+
+up:
+> docker compose up -d --wait
+
+down:
+> docker compose down
+
+logs:
+> docker compose logs -f --tail=100
