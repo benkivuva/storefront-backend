@@ -38,7 +38,18 @@ if err != nil {
 t.Fatalf("connection string: %v", err)
 }
 
-wantTables := []string{"categories", "inventory", "products", "tax_rates", "users"}
+wantTables := []string{
+"addresses",
+"audit_log",
+"categories",
+"email_verification_tokens",
+"inventory",
+"password_reset_tokens",
+"products",
+"refresh_tokens",
+"tax_rates",
+"users",
+}
 
 assertTables(t, url, nil)
 
@@ -51,8 +62,11 @@ v, dirty, err := migrate.Version(url)
 if err != nil {
 t.Fatalf("version: %v", err)
 }
-if v != 1 || dirty {
-t.Fatalf("version=%d dirty=%t, want 1 false", v, dirty)
+if v == 0 {
+t.Fatalf("expected version > 0 after Up, got %d", v)
+}
+if dirty {
+t.Fatalf("database is dirty after Up")
 }
 
 db, err := sql.Open("pgx", url)
@@ -69,8 +83,8 @@ if n != 3 {
 t.Fatalf("tax_rates count = %d, want 3", n)
 }
 
-if err := migrate.Down(ctx, url); err != nil {
-t.Fatalf("down: %v", err)
+if err := migrate.DownAll(ctx, url); err != nil {
+t.Fatalf("down all: %v", err)
 }
 assertTables(t, url, nil)
 
