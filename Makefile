@@ -24,3 +24,17 @@ down:
 
 logs:
 > docker compose logs -f --tail=100
+
+MIGRATION_DATABASE_URL ?= postgres://storefront:storefront@localhost:5432/storefront?sslmode=disable
+
+migrate-up:
+> MIGRATION_DATABASE_URL=$(MIGRATION_DATABASE_URL) go run ./cmd/migrate up
+
+migrate-down:
+> MIGRATION_DATABASE_URL=$(MIGRATION_DATABASE_URL) go run ./cmd/migrate down
+
+migrate-version:
+> MIGRATION_DATABASE_URL=$(MIGRATION_DATABASE_URL) go run ./cmd/migrate version
+
+test-int:
+> go test -race -v ./test/integration/...

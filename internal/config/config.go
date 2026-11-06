@@ -20,12 +20,14 @@ EnvProduction Env = "production"
 // Config is the process-wide configuration, loaded once at startup.
 // Add sections (DB, Redis, providers) when the adapters that read them exist.
 type Config struct {
-Env                 Env           `env:"ENV"                   envDefault:"local"`
-HTTPAddr            string        `env:"HTTP_ADDR"             envDefault:":8080"`
-InternalAddr        string        `env:"INTERNAL_ADDR"         envDefault:":9090"`
-LogLevel            slog.Level    `env:"LOG_LEVEL"             envDefault:"info"`
-ShutdownTimeout     time.Duration `env:"SHUTDOWN_TIMEOUT"      envDefault:"30s"`
-ShutdownPropagation time.Duration `env:"SHUTDOWN_PROPAGATION"  envDefault:"5s"`
+Env                  Env           `env:"ENV"                    envDefault:"local"`
+HTTPAddr             string        `env:"HTTP_ADDR"              envDefault:":8080"`
+InternalAddr         string        `env:"INTERNAL_ADDR"          envDefault:":9090"`
+LogLevel             slog.Level    `env:"LOG_LEVEL"              envDefault:"info"`
+ShutdownTimeout      time.Duration `env:"SHUTDOWN_TIMEOUT"       envDefault:"30s"`
+ShutdownPropagation  time.Duration `env:"SHUTDOWN_PROPAGATION"   envDefault:"5s"`
+DatabaseURL          string        `env:"DATABASE_URL"`
+MigrationDatabaseURL string        `env:"MIGRATION_DATABASE_URL"`
 }
 
 // Load reads configuration from the environment and validates it. The caller
