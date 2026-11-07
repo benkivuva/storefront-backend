@@ -19,3 +19,7 @@ linters:
           deny:
             - pkg: github.com/benkivuva/storefront-backend/internal/adapter
               desc: service depends on domain ports, never adapters
+
+formatters:
+  enable:
+    - gofmt

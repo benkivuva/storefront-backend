@@ -136,7 +136,7 @@ func TestNewUser_RejectsEmptyPasswordHash(t *testing.T) {
 }
 
 func TestNewUser_RejectsInvalidRole(t *testing.T) {
-		for _, r := range []Role{"", "customer ", "Customer", "root", "ROOT", "ADMIN", "Admin"} {
+	for _, r := range []Role{"", "customer ", "Customer", "root", "ROOT", "ADMIN", "Admin"} {
 		_, err := NewUser(testUserID(t), "b@e.com", "h", "", r, "", userTime)
 		if !errors.Is(err, ErrInvalidRole) {
 			t.Errorf("role=%q: want ErrInvalidRole, got %v", r, err)
