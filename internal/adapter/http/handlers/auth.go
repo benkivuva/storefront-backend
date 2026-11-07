@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/base64"
+	"log/slog"
 	"net/http"
 	"net/netip"
 	"time"
@@ -19,7 +20,7 @@ const (
 )
 
 // AuthService is the subset of *service.AuthService the auth handlers use.
-// Consumer-defined so handlers can be tested with a two-method fake instead
+// Consumer-defined so handlers can be tested with a four-method fake instead
 // of the full service.
 type AuthService interface {
 	Register(ctx context.Context, email, password, name, ip string) (domain.User, error)
@@ -53,7 +54,7 @@ type registerRequest struct {
 func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	var req registerRequest
 	if err := decodeJSON(r, &req); err != nil {
-		writeDecodeError(w)
+		handleDecodeError(w, err)
 		return
 	}
 	ip := middleware.ClientIP(r, h.trusted).String()
@@ -73,7 +74,7 @@ type loginRequest struct {
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	var req loginRequest
 	if err := decodeJSON(r, &req); err != nil {
-		writeDecodeError(w)
+		handleDecodeError(w, err)
 		return
 	}
 	ip := middleware.ClientIP(r, h.trusted).String()
@@ -111,10 +112,15 @@ func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// Logout always returns 204 and clears the cookie, whether or not the
+// service successfully revoked the token. A failed revoke is logged; the
+// client sees a clean logout either way.
 func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	raw, err := h.readRefreshCookie(r)
 	if err == nil {
-		_ = h.svc.Logout(r.Context(), raw)
+		if lerr := h.svc.Logout(r.Context(), raw); lerr != nil {
+			slog.ErrorContext(r.Context(), "logout revoke failed", "error", lerr)
+		}
 	}
 	h.clearRefreshCookie(w)
 	w.WriteHeader(http.StatusNoContent)
