@@ -37,6 +37,16 @@ jobs:
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
           govulncheck ./...
+      - name: Install and run gosec
+        run: |
+          go install github.com/securego/gosec/v2/cmd/gosec@latest
+          gosec -no-fail -fmt=text ./... > gosec.out || true
+          if [ -s gosec.out ]; then
+            cat gosec.out
+            if grep -q '^\[.*\] ' gosec.out; then
+              exit 1
+            fi
+          fi
 
   build-and-deploy:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -122,3 +132,4 @@ jobs:
           git commit -m "chore(${IMAGE_NAME}): bump image to ${IMAGE_TAG}"
           git pull --rebase origin main
           git push
+          
