@@ -55,3 +55,9 @@ func writeUnauthorized(w http.ResponseWriter) {
 	w.Header().Set("WWW-Authenticate", "Bearer")
 	dto.WriteProblem(w, http.StatusUnauthorized, "UNAUTHORIZED", "authentication required")
 }
+
+// WithUser stores tok in ctx. Used by handler tests and any caller that
+// has already verified a token outside the Auth middleware.
+func WithUser(ctx context.Context, tok Token) context.Context {
+	return context.WithValue(ctx, userCtxKey{}, tok)
+}
