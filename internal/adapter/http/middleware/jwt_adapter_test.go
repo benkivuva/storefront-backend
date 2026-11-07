@@ -161,3 +161,37 @@ func TestJWTVerifier_DoesNotSwallowError(t *testing.T) {
 		t.Fatalf("error return must be zero Token, got %+v", tok)
 	}
 }
+
+func TestJWTSigner_RoundTrip(t *testing.T) {
+	ks := testJWTKeySet(t)
+	s := NewJWTSigner(ks)
+
+	raw, err := s.Sign(testUserID, domain.RoleCustomer, 5*time.Minute)
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+	tok, err := NewJWTVerifier(ks).Verify(raw)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if tok.UserID != testUserID || tok.Role != domain.RoleCustomer {
+		t.Fatalf("round-trip mismatch: %+v", tok)
+	}
+}
+
+func TestJWTSigner_AdminRole(t *testing.T) {
+	ks := testJWTKeySet(t)
+	s := NewJWTSigner(ks)
+
+	raw, err := s.Sign(testUserID, domain.RoleAdmin, 5*time.Minute)
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+	tok, err := NewJWTVerifier(ks).Verify(raw)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if tok.Role != domain.RoleAdmin {
+		t.Errorf("Role = %q", tok.Role)
+	}
+}

@@ -3,6 +3,7 @@ package middleware
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/benkivuva/storefront-backend/internal/domain"
 	"github.com/benkivuva/storefront-backend/internal/pkg/jwt"
@@ -35,4 +36,18 @@ func (v *JWTVerifier) Verify(raw string) (Token, error) {
 		return Token{}, errors.New("jwt adapter: invalid role in token")
 	}
 	return Token{UserID: id, Role: role}, nil
+}
+
+// JWTSigner adapts *jwt.KeySet to domain.TokenSigner. The jwt package
+// deals in strings; the domain interface uses typed ID and Role.
+type JWTSigner struct {
+	ks *jwt.KeySet
+}
+
+func NewJWTSigner(ks *jwt.KeySet) *JWTSigner {
+	return &JWTSigner{ks: ks}
+}
+
+func (s *JWTSigner) Sign(userID domain.ID, role domain.Role, ttl time.Duration) (string, error) {
+	return s.ks.Sign(userID.String(), string(role), ttl)
 }

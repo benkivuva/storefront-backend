@@ -81,6 +81,9 @@ func Load() (*Config, error) {
 		c.JWTPrivateKeyB64 = base64.StdEncoding.EncodeToString(seed)
 		slog.Warn("config: generated ephemeral JWT signing key (local env; tokens invalidated on restart)")
 	}
+	if c.DatabaseURL == "" && c.Env == EnvLocal {
+		c.DatabaseURL = "postgres://storefront:storefront@localhost:5432/storefront?sslmode=disable"
+	}
 	if len(c.CORSAllowedOrigins) == 0 && c.Env == EnvLocal {
 		c.CORSAllowedOrigins = []string{"http://localhost:3000"}
 	}
