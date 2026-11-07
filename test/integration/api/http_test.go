@@ -280,7 +280,7 @@ func (d *httpDoer) do(method, path, body, jwt, origin, xff string) (*http.Respon
 	if err != nil {
 		d.t.Fatalf("http do %s %s: %v", method, path, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	respBody, _ := io.ReadAll(resp.Body)
 	// Update jar from Set-Cookie
 	if setCookies := resp.Cookies(); len(setCookies) > 0 {
@@ -752,7 +752,7 @@ func TestHTTP_CORS_Preflight_Allowed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("preflight: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("status = %d", resp.StatusCode)
@@ -772,7 +772,7 @@ func TestHTTP_CORS_Preflight_Disallowed_403(t *testing.T) {
 	if err != nil {
 		t.Fatalf("preflight: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403", resp.StatusCode)
@@ -898,7 +898,7 @@ func TestHTTP_RequestIDPresent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.Header.Get("X-Request-ID") == "" {
 		t.Error("X-Request-ID missing")
