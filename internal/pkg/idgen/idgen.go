@@ -20,12 +20,12 @@ func (g *Generator) NewID() domain.ID {
 		panic("idgen: crypto/rand unavailable: " + err.Error())
 	}
 	ms := uint64(time.Now().UnixMilli())
-	id[0] = byte(ms >> 40)
-	id[1] = byte(ms >> 32)
-	id[2] = byte(ms >> 24)
-	id[3] = byte(ms >> 16)
-	id[4] = byte(ms >> 8)
-	id[5] = byte(ms)
+	id[0] = byte((ms >> 40) & 0xff)
+	id[1] = byte((ms >> 32) & 0xff)
+	id[2] = byte((ms >> 24) & 0xff)
+	id[3] = byte((ms >> 16) & 0xff)
+	id[4] = byte((ms >> 8) & 0xff)
+	id[5] = byte(ms & 0xff)
 	id[6] = (b[0] & 0x0f) | 0x70
 	id[7] = b[1]
 	id[8] = (b[2] & 0x3f) | 0x80

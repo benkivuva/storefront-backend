@@ -103,6 +103,7 @@ func Verify(password, encoded string, current Params) (bool, bool, error) {
 	if err != nil {
 		return false, false, err
 	}
+	// #nosec G115 -- key is always keyLen (32) bytes.
 	computed := argon2.IDKey([]byte(password), salt, stored.Time, stored.Memory, stored.Threads, uint32(len(key)))
 	if subtle.ConstantTimeCompare(key, computed) != 1 {
 		return false, false, nil

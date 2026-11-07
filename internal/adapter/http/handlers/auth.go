@@ -127,6 +127,7 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AuthHandler) setRefreshCookie(w http.ResponseWriter, raw []byte) {
+	// #nosec G124 -- Secure is env-driven: true in staging/prod, false for local HTTP.
 	http.SetCookie(w, &http.Cookie{
 		Name:     refreshCookieName,
 		Value:    base64.RawURLEncoding.EncodeToString(raw),
@@ -147,6 +148,7 @@ func (h *AuthHandler) readRefreshCookie(r *http.Request) ([]byte, error) {
 }
 
 func (h *AuthHandler) clearRefreshCookie(w http.ResponseWriter) {
+	// #nosec G124 -- Secure is env-driven: true in staging/prod, false for local HTTP.
 	http.SetCookie(w, &http.Cookie{
 		Name:     refreshCookieName,
 		Value:    "",
