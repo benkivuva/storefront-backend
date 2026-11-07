@@ -2,6 +2,7 @@ package redis
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -101,7 +102,6 @@ func TestLockout_Escalation(t *testing.T) {
 	c := setupRedis(t)
 	ls := mustLockout(t, c)
 	ctx := context.Background()
-	key := []any{lockUser1, "1.2.3.0/24"}
 
 	w, _ := ls.RecordFailedAttempt(ctx, lockUser1, "1.2.3.0/24") // count 1
 	if w != 0 {
@@ -131,7 +131,6 @@ func TestLockout_Escalation(t *testing.T) {
 	if w != 2*time.Second {
 		t.Errorf("F6: wait = %v, want 2s", w)
 	}
-	_ = key
 }
 
 func TestLockout_ResetClears(t *testing.T) {
@@ -153,7 +152,6 @@ func TestLockout_ResetClears(t *testing.T) {
 		t.Fatalf("wait after reset = %v, want 0", w)
 	}
 
-	// A new failure should start at count 1 (no wait).
 	if w, _ := ls.RecordFailedAttempt(ctx, lockUser1, "1.2.3.0/24"); w != 0 {
 		t.Fatalf("post-reset failure: wait = %v, want 0", w)
 	}
@@ -206,7 +204,6 @@ func TestLockout_Concurrent(t *testing.T) {
 	close(start)
 	wg.Wait()
 
-	// Count must be exactly N. Read the hash field directly.
 	count, err := c.HGet(ctx, lockoutKey(lockUser1, "1.2.3.0/24"), "count").Int64()
 	if err != nil {
 		t.Fatal(err)
@@ -215,7 +212,6 @@ func TestLockout_Concurrent(t *testing.T) {
 		t.Fatalf("count = %d, want %d (Lua must serialize increments)", count, N)
 	}
 
-	// Wait should reflect count >= 6 → tier 3 (2s).
 	w, _ := ls.Backoff(ctx, lockUser1, "1.2.3.0/24")
 	if w <= 0 || w > 2*time.Second {
 		t.Fatalf("wait = %v, want (0,2s]", w)
@@ -275,20 +271,9 @@ func TestNewLockoutStore_InvalidArgs(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := NewLockoutStore(c, tc.schedule, tc.ttl); !errors_Is(err, tc.wantErr) {
+			if _, err := NewLockoutStore(c, tc.schedule, tc.ttl); !errors.Is(err, tc.wantErr) {
 				t.Fatalf("want %v, got %v", tc.wantErr, err)
 			}
 		})
 	}
-}
-
-// errors_Is is a tiny shim so we can reuse the sentinel comparison pattern
-// without importing errors twice in test boilerplate — avoids name collision
-// with stdlib errors in the imports above.
-func errors_Is(got, want error) bool {
-	if got == nil {
-		return want == nil
-	}
-	return got == want || (want != nil && (got.Error() == want.Error() ||
-		len(got.Error()) > len(want.Error()) && got.Error()[:len(want.Error())] == want.Error()))
 }
