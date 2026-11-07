@@ -38,3 +38,15 @@ migrate-version:
 
 test-int:
 > go test -race -v ./test/integration/...
+
+.PHONY: genkey
+genkey:
+> @if [ -f $(HOME)/.storefront-dev-key ]; then \
+> echo "$(HOME)/.storefront-dev-key exists — not overwriting."; \
+> echo "To regenerate: go run ./cmd/genkey -force -f $(HOME)/.storefront-dev-key"; \
+> else \
+> go run ./cmd/genkey -f $(HOME)/.storefront-dev-key; \
+> fi
+> @echo ""
+> @echo "To use: source $(HOME)/.storefront-dev-key"
+> @echo "Or add to .env: $$(cat $(HOME)/.storefront-dev-key)"
