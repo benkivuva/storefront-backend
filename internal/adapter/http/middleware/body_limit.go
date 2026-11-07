@@ -1,10 +1,11 @@
 package middleware
 
 import (
-	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
+
+	"github.com/benkivuva/storefront-backend/internal/adapter/http/dto"
 )
 
 // ErrBodyTooLarge is returned by reads that exceed the limit installed by
@@ -35,15 +36,9 @@ func BodyTooLarge(err error) bool {
 
 // WriteBodyTooLarge writes an RFC 7807 problem response for a 413.
 func WriteBodyTooLarge(w http.ResponseWriter, maxBytes int64) {
-	w.Header().Set("Content-Type", "application/problem+json")
-	w.WriteHeader(http.StatusRequestEntityTooLarge)
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"type":      "about:blank",
-		"title":     "Request body too large",
-		"status":    http.StatusRequestEntityTooLarge,
-		"code":      "BODY_TOO_LARGE",
-		"max_bytes": maxBytes,
-	})
+	dto.WriteProblemExtra(w, http.StatusRequestEntityTooLarge,
+		"BODY_TOO_LARGE", "Request body too large",
+		map[string]any{"max_bytes": maxBytes})
 }
 
 // limitedReader reads at most `remaining` bytes from the underlying reader.

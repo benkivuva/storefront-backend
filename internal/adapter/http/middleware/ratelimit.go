@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/netip"
 	"strconv"
+
+	"github.com/benkivuva/storefront-backend/internal/adapter/http/dto"
 	"time"
 )
 
@@ -51,7 +53,7 @@ func RateLimit(cfg RateLimitConfig) func(http.Handler) http.Handler {
 				if err != nil {
 					slog.ErrorContext(r.Context(),
 						"rate limiter unavailable", "error", err, "key", key)
-					WriteProblem(w, http.StatusServiceUnavailable,
+					dto.WriteProblem(w, http.StatusServiceUnavailable,
 						"RATE_LIMITER_UNAVAILABLE",
 						"rate limiter temporarily unavailable")
 					return
@@ -65,7 +67,7 @@ func RateLimit(cfg RateLimitConfig) func(http.Handler) http.Handler {
 					secs = 1
 				}
 				w.Header().Set("Retry-After", strconv.Itoa(secs))
-				WriteProblem(w, http.StatusTooManyRequests,
+				dto.WriteProblem(w, http.StatusTooManyRequests,
 					"RATE_LIMITED", "rate limit exceeded")
 				return
 			}

@@ -3,6 +3,7 @@ package middleware
 import (
 	"net/http"
 
+	"github.com/benkivuva/storefront-backend/internal/adapter/http/dto"
 	"github.com/benkivuva/storefront-backend/internal/domain"
 )
 
@@ -11,7 +12,7 @@ func RequireRole(roles ...domain.Role) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			u, ok := UserFrom(r.Context())
 			if !ok {
-				WriteProblem(w, http.StatusUnauthorized, "UNAUTHORIZED", "authentication required")
+				dto.WriteProblem(w, http.StatusUnauthorized, "UNAUTHORIZED", "authentication required")
 				return
 			}
 			if len(roles) == 0 {
@@ -24,7 +25,7 @@ func RequireRole(roles ...domain.Role) func(http.Handler) http.Handler {
 					return
 				}
 			}
-			WriteProblem(w, http.StatusForbidden, "FORBIDDEN", "insufficient role")
+			dto.WriteProblem(w, http.StatusForbidden, "FORBIDDEN", "insufficient role")
 		})
 	}
 }

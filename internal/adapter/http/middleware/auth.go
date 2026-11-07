@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/benkivuva/storefront-backend/internal/adapter/http/dto"
 	"github.com/benkivuva/storefront-backend/internal/domain"
 )
 
@@ -52,5 +53,5 @@ func UserFrom(ctx context.Context) (Token, bool) {
 
 func writeUnauthorized(w http.ResponseWriter) {
 	w.Header().Set("WWW-Authenticate", "Bearer")
-	WriteProblem(w, http.StatusUnauthorized, "UNAUTHORIZED", "authentication required")
+	dto.WriteProblem(w, http.StatusUnauthorized, "UNAUTHORIZED", "authentication required")
 }
