@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"net/netip"
 	"time"
 
 	"github.com/benkivuva/storefront-backend/internal/domain"
@@ -57,7 +59,7 @@ func NewAuthService(
 	cfg Config,
 ) (*AuthService, error) {
 	if cfg.AccessTTL <= 0 || cfg.RefreshTTL <= 0 {
-		return nil, fmt.Errorf("service: TTLs must be positive")
+		return nil, errors.New("service: TTLs must be positive")
 	}
 	dummy, err := hasher.Hash("constant-time-dummy-not-a-real-password")
 	if err != nil {
@@ -116,15 +118,18 @@ func (s *AuthService) Register(ctx context.Context, email, password, name, ip st
 	return u, nil
 }
 
-// Login always returns ErrInvalidCredentials on failure (uniform response,
-// §13.1); the reason is recorded only in the audit log.
+// Login returns ErrInvalidCredentials for every authentication failure; the
+// reason is recorded only in the audit log. If the lockout store is
+// unavailable it fails closed (§13.2).
 func (s *AuthService) Login(ctx context.Context, email, password, ip, userAgent string) (LoginResult, error) {
 	now := s.clock.Now()
+
 	normalized, err := domain.NormalizeEmail(email)
 	if err != nil {
 		s.dummyVerify(password)
 		return LoginResult{}, ErrInvalidCredentials
 	}
+
 	u, err := s.users.FindByEmail(ctx, normalized)
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
@@ -138,41 +143,52 @@ func (s *AuthService) Login(ctx context.Context, email, password, ip, userAgent 
 		s.auditEvent(ctx, u.ID(), "login_inactive_account", "user", u.ID().String(), ip, nil, nil)
 		return LoginResult{}, ErrInvalidCredentials
 	}
-	locked, err := s.lockout.IsLocked(ctx, u.ID())
+
+	prefix := ipPrefix(parseIP(ip))
+	wait, err := s.lockout.Backoff(ctx, u.ID(), prefix)
 	if err != nil {
-		s.auditEvent(ctx, u.ID(), "login_lockout_store_error", "user", u.ID().String(), ip, nil, nil)
-	} else if locked {
+		return LoginResult{}, fmt.Errorf("login: lockout: %w", err)
+	}
+	if wait > 0 {
 		s.dummyVerify(password)
 		s.auditEvent(ctx, u.ID(), "login_locked", "user", u.ID().String(), ip, nil, nil)
 		return LoginResult{}, ErrInvalidCredentials
 	}
+
 	match, needsRehash, err := s.hasher.Verify(password, u.PasswordHash())
 	if err != nil {
 		return LoginResult{}, fmt.Errorf("login: verify: %w", err)
 	}
 	if !match {
-		_, _, lerr := s.lockout.RecordFailedAttempt(ctx, u.ID(), ip)
-		if lerr != nil {
-			s.auditEvent(ctx, u.ID(), "login_lockout_store_error", "user", u.ID().String(), ip, nil, nil)
+		if _, err := s.lockout.RecordFailedAttempt(ctx, u.ID(), prefix); err != nil {
+			logErr(ctx, "record failed login attempt", err)
 		}
 		s.auditEvent(ctx, u.ID(), "login_failed", "user", u.ID().String(), ip, nil, nil)
 		return LoginResult{}, ErrInvalidCredentials
 	}
-	_ = s.lockout.Reset(ctx, u.ID())
+
+	if err := s.lockout.Reset(ctx, u.ID(), prefix); err != nil {
+		logErr(ctx, "reset login lockout", err)
+	}
 	if needsRehash {
-		if newHash, herr := s.hasher.Hash(password); herr == nil {
-			if u2, werr := u.WithPasswordHash(newHash, now); werr == nil {
-				if uerr := s.users.Update(ctx, u2); uerr == nil {
-					u = u2
-				}
-			}
-		}
+		s.rehash(ctx, u.ID(), password, now)
 	}
 	return s.issueTokens(ctx, u, ip, userAgent, now)
 }
 
+func (s *AuthService) rehash(ctx context.Context, userID domain.ID, password string, now time.Time) {
+	hash, err := s.hasher.Hash(password)
+	if err != nil {
+		logErr(ctx, "rehash password", err)
+		return
+	}
+	if err := s.users.UpdatePasswordHash(ctx, userID, hash, now); err != nil {
+		logErr(ctx, "store rehashed password", err)
+	}
+}
+
 func (s *AuthService) issueTokens(ctx context.Context, u domain.User, ip, userAgent string, now time.Time) (LoginResult, error) {
-	access, err := s.signer.Sign(u.ID().String(), string(u.Role()), s.accessTTL)
+	access, err := s.signer.Sign(u.ID(), u.Role(), s.accessTTL)
 	if err != nil {
 		return LoginResult{}, fmt.Errorf("issue tokens: sign: %w", err)
 	}
@@ -195,9 +211,10 @@ func (s *AuthService) issueTokens(ctx context.Context, u domain.User, ip, userAg
 	return LoginResult{AccessToken: access, RefreshToken: raw, User: u}, nil
 }
 
-// Refresh contract: repository.Rotate must return domain.ErrConflict when
-// the conditional update affects zero rows (concurrent rotation). Treated
-// here as reuse → family revoked.
+// Refresh rotates a refresh token. A revoked parent, or a concurrent rotation
+// (ErrConflict from the repository), is treated as reuse and revokes the
+// whole family. Sign happens before Rotate so a signing failure cannot strand
+// the client with a revoked token.
 func (s *AuthService) Refresh(ctx context.Context, raw []byte, ip, userAgent string) (LoginResult, error) {
 	now := s.clock.Now()
 	if len(raw) == 0 {
@@ -218,10 +235,18 @@ func (s *AuthService) Refresh(ctx context.Context, raw []byte, ip, userAgent str
 	}
 	u, err := s.users.FindByID(ctx, parent.UserID())
 	if err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			return LoginResult{}, ErrInvalidCredentials
+		}
 		return LoginResult{}, fmt.Errorf("refresh: find user: %w", err)
 	}
 	if !u.IsActive() {
 		return LoginResult{}, ErrInvalidCredentials
+	}
+
+	access, err := s.signer.Sign(u.ID(), u.Role(), s.accessTTL)
+	if err != nil {
+		return LoginResult{}, fmt.Errorf("refresh: sign: %w", err)
 	}
 	newRaw, err := s.rawTokens.NewRawToken()
 	if err != nil {
@@ -242,20 +267,19 @@ func (s *AuthService) Refresh(ctx context.Context, raw []byte, ip, userAgent str
 		}
 		return LoginResult{}, fmt.Errorf("refresh: persist: %w", err)
 	}
-	access, err := s.signer.Sign(u.ID().String(), string(u.Role()), s.accessTTL)
-	if err != nil {
-		return LoginResult{}, fmt.Errorf("refresh: sign: %w", err)
-	}
 	return LoginResult{AccessToken: access, RefreshToken: newRaw, User: u}, nil
 }
 
 func (s *AuthService) handleReuse(ctx context.Context, parent domain.RefreshToken, ip string, now time.Time) error {
-	_, _ = s.refresh.RevokeFamily(ctx, parent.FamilyID(), now)
+	if _, err := s.refresh.RevokeFamily(ctx, parent.FamilyID(), now); err != nil {
+		logErr(ctx, "revoke token family", err)
+	}
 	s.auditEvent(ctx, parent.UserID(), "refresh_reuse_detected", "refresh_token", parent.ID().String(), ip, nil, nil)
 	return ErrTokenReused
 }
 
-// Logout revokes the whole family (§7), not just the presented token.
+// Logout revokes the presented token's whole family (§7), so a stale token
+// cannot leave its live successor valid.
 func (s *AuthService) Logout(ctx context.Context, raw []byte) error {
 	if len(raw) == 0 {
 		return nil
@@ -267,8 +291,10 @@ func (s *AuthService) Logout(ctx context.Context, raw []byte) error {
 		}
 		return fmt.Errorf("logout: find: %w", err)
 	}
-	_, err = s.refresh.RevokeFamily(ctx, t.FamilyID(), s.clock.Now())
-	return err
+	if _, err := s.refresh.RevokeFamily(ctx, t.FamilyID(), s.clock.Now()); err != nil {
+		return fmt.Errorf("logout: revoke: %w", err)
+	}
+	return nil
 }
 
 func (s *AuthService) GetMe(ctx context.Context, userID domain.ID) (domain.User, error) {
@@ -296,28 +322,32 @@ func (s *AuthService) UpdateMe(ctx context.Context, userID domain.ID, patch Upda
 		return domain.User{}, err
 	}
 	now := s.clock.Now()
+
+	// Persist validated values, not raw input.
+	var name, phone *string
 	if patch.Name != nil {
-		u, err = u.WithName(*patch.Name, now)
-		if err != nil {
+		if u, err = u.WithName(*patch.Name, now); err != nil {
 			return domain.User{}, err
 		}
+		v := u.Name()
+		name = &v
 	}
 	if patch.Phone != nil {
-		u, err = u.WithPhone(*patch.Phone, now)
-		if err != nil {
+		if u, err = u.WithPhone(*patch.Phone, now); err != nil {
 			return domain.User{}, err
 		}
+		v := u.PhoneE164()
+		phone = &v
 	}
-	if err := s.users.Update(ctx, u); err != nil {
+	if err := s.users.UpdateProfile(ctx, userID, name, phone, now); err != nil {
 		return domain.User{}, fmt.Errorf("update me: persist: %w", err)
 	}
 	// Audit records which fields changed, not their values (§13.3).
-	s.auditEvent(ctx, userID, "user_updated", "user", userID.String(), "",
-		fieldChangeDigest(patch), nil)
+	s.auditEvent(ctx, userID, "user_updated", "user", userID.String(), "", nil, fieldChanges(patch))
 	return u, nil
 }
 
-func fieldChangeDigest(p UpdateMePatch) []byte {
+func fieldChanges(p UpdateMePatch) []byte {
 	m := map[string]bool{}
 	if p.Name != nil {
 		m["name_changed"] = true
@@ -351,11 +381,10 @@ func (s *AuthService) CreateAddress(ctx context.Context, userID domain.ID, in Cr
 	if len(existing) >= maxAddressesPerUser {
 		return domain.Address{}, ErrAddressLimit
 	}
-	now := s.clock.Now()
 	a, err := domain.NewAddress(
 		s.ids.NewID(), userID,
 		in.Recipient, in.Phone, in.Line1, in.Line2, in.Town, in.County, in.Notes,
-		now,
+		s.clock.Now(),
 	)
 	if err != nil {
 		return domain.Address{}, err
@@ -398,14 +427,44 @@ func (s *AuthService) dummyVerify(password string) {
 }
 
 func (s *AuthService) auditEvent(ctx context.Context, actor domain.ID, action, entityType, entityID, ip string, before, after []byte) {
-	_ = s.audit.Append(ctx, domain.AuditEntry{
+	err := s.audit.Append(ctx, domain.AuditEntry{
 		Actor:      actor,
 		Action:     action,
 		EntityType: entityType,
 		EntityID:   entityID,
 		Before:     before,
 		After:      after,
-		IP:         ip,
+		IP:         parseIP(ip),
 		At:         s.clock.Now(),
 	})
+	if err != nil {
+		logErr(ctx, "audit append", err, "action", action)
+	}
+}
+
+func logErr(ctx context.Context, msg string, err error, attrs ...any) {
+	slog.ErrorContext(ctx, msg, append(attrs, "error", err)...)
+}
+
+func parseIP(s string) netip.Addr {
+	a, err := netip.ParseAddr(s)
+	if err != nil {
+		return netip.Addr{}
+	}
+	return a.Unmap()
+}
+
+func ipPrefix(a netip.Addr) string {
+	if !a.IsValid() {
+		return "unknown"
+	}
+	bits := 64
+	if a.Is4() {
+		bits = 24
+	}
+	p, err := a.Prefix(bits)
+	if err != nil {
+		return "unknown"
+	}
+	return p.String()
 }
