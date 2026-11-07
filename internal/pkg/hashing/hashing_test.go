@@ -187,7 +187,7 @@ t.Fatalf("want ErrIncompatibleVersion, got %v", err)
 
 func TestHash_EmptyPasswordAllowed(t *testing.T) {
 // Strength rules (min length, common password) are enforced by
-// password_policy, not by the hashing layer.
+// domain.ValidatePassword, not by the hashing layer.
 p := DefaultParams()
 encoded, err := Hash("", p)
 if err != nil {
