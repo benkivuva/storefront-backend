@@ -1,4 +1,4 @@
-package password_policy
+package domain
 
 import (
 "errors"
@@ -19,8 +19,8 @@ strings.Repeat("a", 128),        // exactly max
 }
 for _, pw := range valid {
 t.Run(fmt.Sprintf("len=%d", len(pw)), func(t *testing.T) {
-if err := Validate(pw); err != nil {
-t.Fatalf("Validate(%q): %v", pw, err)
+if err := ValidatePassword(pw); err != nil {
+t.Fatalf("ValidatePassword(%q): %v", pw, err)
 }
 })
 }
@@ -30,9 +30,9 @@ func TestValidate_RejectsTooShort(t *testing.T) {
 cases := []string{"", "a", "short", "1234567"}
 for _, pw := range cases {
 t.Run(pw, func(t *testing.T) {
-err := Validate(pw)
-if !errors.Is(err, ErrTooShort) {
-t.Fatalf("Validate(%q): want ErrTooShort, got %v", pw, err)
+err := ValidatePassword(pw)
+if !errors.Is(err, ErrPasswordTooShort) {
+t.Fatalf("ValidatePassword(%q): want ErrPasswordTooShort, got %v", pw, err)
 }
 })
 }
@@ -40,14 +40,14 @@ t.Fatalf("Validate(%q): want ErrTooShort, got %v", pw, err)
 
 func TestValidate_RejectsTooLong(t *testing.T) {
 pw := strings.Repeat("a", 129)
-if err := Validate(pw); !errors.Is(err, ErrTooLong) {
-t.Fatalf("want ErrTooLong, got %v", err)
+if err := ValidatePassword(pw); !errors.Is(err, ErrPasswordTooLong) {
+t.Fatalf("want ErrPasswordTooLong, got %v", err)
 }
 }
 
 func TestValidate_RejectsCommon(t *testing.T) {
-	// Some blocklist entries are shorter than MinLength. They still fail —
-	// via ErrTooShort, which fires before the blocklist check. The test
+	// Some blocklist entries are shorter than PasswordMinLength. They still fail —
+	// via ErrPasswordTooShort, which fires before the blocklist check. The test
 	// asserts "rejected," not "rejected via blocklist specifically."
 	common := []string{
 		"password", "password123", "12345678", "qwerty", "qwertyuiop",
@@ -57,9 +57,9 @@ func TestValidate_RejectsCommon(t *testing.T) {
 	}
 	for _, pw := range common {
 		t.Run(pw, func(t *testing.T) {
-			err := Validate(pw)
-			if !errors.Is(err, ErrCommon) && !errors.Is(err, ErrTooShort) {
-				t.Fatalf("Validate(%q): want rejection, got %v", pw, err)
+			err := ValidatePassword(pw)
+			if !errors.Is(err, ErrPasswordCommon) && !errors.Is(err, ErrPasswordTooShort) {
+				t.Fatalf("ValidatePassword(%q): want rejection, got %v", pw, err)
 			}
 		})
 	}
@@ -68,9 +68,9 @@ func TestValidate_RejectsCommon(t *testing.T) {
 func TestValidate_CaseInsensitive(t *testing.T) {
 	for _, pw := range []string{"Password", "PASSWORD", "PaSsWoRd", "QwErTy", "Admin123"} {
 		t.Run(pw, func(t *testing.T) {
-			err := Validate(pw)
-			if !errors.Is(err, ErrCommon) && !errors.Is(err, ErrTooShort) {
-				t.Fatalf("Validate(%q): want rejection (case-insensitive), got %v", pw, err)
+			err := ValidatePassword(pw)
+			if !errors.Is(err, ErrPasswordCommon) && !errors.Is(err, ErrPasswordTooShort) {
+				t.Fatalf("ValidatePassword(%q): want rejection (case-insensitive), got %v", pw, err)
 			}
 		})
 	}
@@ -82,22 +82,22 @@ func TestValidate_LeetspeakNotFullyBlocked(t *testing.T) {
 // was leetspeak-normalized. Users with novel leetspeak will pass the
 // blocklist. That is acceptable — the blocklist is a floor, not a
 // comprehensive check.
-if err := Validate("P@ssw0rd"); !errors.Is(err, ErrCommon) {
+if err := ValidatePassword("P@ssw0rd"); !errors.Is(err, ErrPasswordCommon) {
 t.Fatalf("P@ssw0rd should be blocked (explicit entry)")
 }
 // A leetspeak variant NOT in the list passes. That's by design.
-if err := Validate("p4ssw0rd_unique"); err != nil {
+if err := ValidatePassword("p4ssw0rd_unique"); err != nil {
 t.Fatalf("non-blocklisted leetspeak should pass, got %v", err)
 }
 }
 
 func TestValidate_ErrorMessagesContainContext(t *testing.T) {
 // Frontend users see these messages. They should be self-explanatory.
-err := Validate("short")
+err := ValidatePassword("short")
 if !strings.Contains(err.Error(), "min 8") {
 t.Errorf("short error should mention min 8: %v", err)
 }
-err = Validate(strings.Repeat("a", 200))
+err = ValidatePassword(strings.Repeat("a", 200))
 if !strings.Contains(err.Error(), "max 128") {
 t.Errorf("long error should mention max 128: %v", err)
 }
@@ -109,18 +109,18 @@ func TestProperty_ValidLengthNotBlockedPasses(t *testing.T) {
 r := rand.New(rand.NewPCG(301, 302))
 const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 for i := 0; i < 500; i++ {
-n := MinLength + r.IntN(MaxLength-MinLength+1)
+n := PasswordMinLength + r.IntN(PasswordMaxLength-PasswordMinLength+1)
 b := make([]byte, n)
 for j := range b {
 b[j] = alphabet[r.IntN(len(alphabet))]
 }
 pw := string(b)
-if err := Validate(pw); err != nil {
+if err := ValidatePassword(pw); err != nil {
 // Might accidentally hit blocklist for very short strings.
-if errors.Is(err, ErrCommon) && n < 12 {
+if errors.Is(err, ErrPasswordCommon) && n < 12 {
 continue
 }
-t.Fatalf("iter %d: Validate(%q) unexpectedly failed: %v", i, pw, err)
+t.Fatalf("iter %d: ValidatePassword(%q) unexpectedly failed: %v", i, pw, err)
 }
 }
 }
@@ -133,14 +133,14 @@ func TestProperty_BlocklistEntriesRejectedCaseInsensitive(t *testing.T) {
 			strings.ToUpper(pw),
 			strings.ToLower(pw),
 		} {
-			err := Validate(variant)
-			if errors.Is(err, ErrTooShort) {
-				// Blocklist entries shorter than MinLength never reach the
+			err := ValidatePassword(variant)
+			if errors.Is(err, ErrPasswordTooShort) {
+				// Blocklist entries shorter than PasswordMinLength never reach the
 				// blocklist check — they fail on length first. That's correct
 				// behavior (length is more actionable than "too common").
 				continue
 			}
-			if !errors.Is(err, ErrCommon) {
+			if !errors.Is(err, ErrPasswordCommon) {
 				t.Errorf("blocklist entry %q (variant %q) not rejected: %v", pw, variant, err)
 			}
 		}

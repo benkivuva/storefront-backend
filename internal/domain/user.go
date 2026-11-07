@@ -78,7 +78,7 @@ func NewUser(id ID, email, passwordHash, name string, role Role, phoneE164 strin
 	if id.IsZero() {
 		return User{}, ErrZeroUserID
 	}
-	normalizedEmail, err := normalizeEmail(email)
+	normalizedEmail, err := NormalizeEmail(email)
 	if err != nil {
 		return User{}, err
 	}
@@ -171,7 +171,9 @@ func (u User) WithPasswordHash(hash string, at time.Time) (User, error) {
 	return u, nil
 }
 
-func normalizeEmail(s string) (string, error) {
+// NormalizeEmail lowercases and trims email. Exported so auth_service can
+// normalize before FindByEmail — citext handles case, not whitespace.
+func NormalizeEmail(s string) (string, error) {
 	s = strings.TrimSpace(strings.ToLower(s))
 	if s == "" || len(s) > 254 {
 		return "", fmt.Errorf("%w: %q", ErrInvalidEmail, s)

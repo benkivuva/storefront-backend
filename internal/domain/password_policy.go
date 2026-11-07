@@ -1,4 +1,4 @@
-package password_policy
+package domain
 
 import (
 "errors"
@@ -7,28 +7,28 @@ import (
 )
 
 var (
-ErrTooShort = errors.New("password policy: password too short")
-ErrTooLong  = errors.New("password policy: password too long")
-ErrCommon   = errors.New("password policy: password is too common")
+ErrPasswordTooShort = errors.New("password policy: password too short")
+ErrPasswordTooLong  = errors.New("password policy: password too long")
+ErrPasswordCommon   = errors.New("password policy: password is too common")
 )
 
 const (
-MinLength = 8
-MaxLength = 128
+PasswordMinLength = 8
+PasswordMaxLength = 128
 )
 
-// Validate returns nil if password is acceptable. Composition rules
+// ValidatePassword returns nil if password is acceptable. Composition rules
 // (uppercase/digit/symbol) are deliberately not enforced — NIST SP 800-63B
 // is that they make passwords worse without adding security.
-func Validate(password string) error {
-if len(password) < MinLength {
-return fmt.Errorf("%w: min %d, got %d", ErrTooShort, MinLength, len(password))
+func ValidatePassword(password string) error {
+if len(password) < PasswordMinLength {
+return fmt.Errorf("%w: min %d, got %d", ErrPasswordTooShort, PasswordMinLength, len(password))
 }
-if len(password) > MaxLength {
-return fmt.Errorf("%w: max %d, got %d", ErrTooLong, MaxLength, len(password))
+if len(password) > PasswordMaxLength {
+return fmt.Errorf("%w: max %d, got %d", ErrPasswordTooLong, PasswordMaxLength, len(password))
 }
 if _, ok := commonPasswords[strings.ToLower(password)]; ok {
-return ErrCommon
+return ErrPasswordCommon
 }
 return nil
 }
