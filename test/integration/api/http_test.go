@@ -954,9 +954,13 @@ func TestHTTP_Refresh_Concurrent(t *testing.T) {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			// Each goroutine gets its own doer with the same initial cookie
 			gd := newDoer(t, s)
-			gd.jar = cookies
+			// Deep-copy each cookie so goroutines don't share memory.
+			gd.jar = make([]*http.Cookie, len(cookies))
+			for j, c := range cookies {
+				cc := *c
+				gd.jar[j] = &cc
+			}
 			<-start
 			resp, _ := gd.do("POST", "/api/v1/auth/refresh", "", "", testOrigin, xff)
 			results[idx] = resp.StatusCode
