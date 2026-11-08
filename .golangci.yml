@@ -3,6 +3,7 @@ version: "2"
 linters:
   enable:
     - depguard
+    - gosec
   settings:
     depguard:
       rules:
@@ -19,6 +20,13 @@ linters:
           deny:
             - pkg: github.com/benkivuva/storefront-backend/internal/adapter
               desc: service depends on domain ports, never adapters
+  exclusions:
+    rules:
+      # Gosec targets production code. Tests use weak rand for determinism,
+      # variable URLs for httptest, and construct cookies without flags.
+      - path: _test\.go
+        linters:
+          - gosec
 
 formatters:
   enable:
