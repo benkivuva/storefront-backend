@@ -13,9 +13,12 @@ import (
 	"net/netip"
 	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	golangjwt "github.com/golang-jwt/jwt/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/testcontainers/testcontainers-go"
@@ -145,6 +148,7 @@ type serverOpts struct {
 	GlobalFallback middleware.RateLimiter
 	AuthCapacity   int
 	GlobalCapacity int
+	SecureCookies  bool
 }
 
 func newTestServer(t *testing.T, opts serverOpts) *testServer {
@@ -202,7 +206,7 @@ func newTestServer(t *testing.T, opts serverOpts) *testServer {
 		netip.MustParsePrefix("::1/128"),
 	}
 
-	authH := handlers.NewAuthHandler(svc, trusted, 7*24*time.Hour, false)
+	authH := handlers.NewAuthHandler(svc, trusted, 7*24*time.Hour, opts.SecureCookies)
 	meH := handlers.NewMeHandler(svc)
 
 	router := httpsrv.NewPublicRouter(httpsrv.RouterConfig{
@@ -326,13 +330,13 @@ func uniqueEmail(t *testing.T) string {
 	return "t" + strings.ToLower(base64.RawURLEncoding.EncodeToString(b[:])) + "@test.local"
 }
 
-// uniqueXFF returns a per-test X-Forwarded-For value so each test gets its
-// own rate-limit and lockout bucket.
+var xffCounter int64
+
 func uniqueXFF(t *testing.T) string {
 	t.Helper()
-	var b [2]byte
-	_, _ = crand.Read(b[:])
-	return fmt.Sprintf("10.%d.%d.1", b[0], b[1])
+	n := atomic.AddInt64(&xffCounter, 1)
+	// Produce 10.<high>.<low>.1 so every test gets a unique /24 bucket
+	return fmt.Sprintf("10.%d.%d.1", (n>>8)&0xff, n&0xff)
 }
 
 func decodeProblem(t *testing.T, body []byte) map[string]any {
@@ -903,4 +907,181 @@ func TestHTTP_RequestIDPresent(t *testing.T) {
 	if resp.Header.Get("X-Request-ID") == "" {
 		t.Error("X-Request-ID missing")
 	}
+}
+
+func TestHTTP_Refresh_Concurrent(t *testing.T) {
+	s := newTestServer(t, serverOpts{})
+	d, _, _ := registerAndLogin(t, s)
+	xff := uniqueXFF(t)
+
+	// Snapshot the cookie from login
+	cookies := append([]*http.Cookie(nil), d.jar...)
+
+	var wg sync.WaitGroup
+	const N = 5
+	results := make([]int, N)
+
+	start := make(chan struct{})
+	for i := 0; i < N; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			// Each goroutine gets its own doer with the same initial cookie
+			gd := newDoer(t, s)
+			gd.jar = cookies
+			<-start
+			resp, _ := gd.do("POST", "/api/v1/auth/refresh", "", "", testOrigin, xff)
+			results[idx] = resp.StatusCode
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	success, reused := 0, 0
+	for _, code := range results {
+		if code == http.StatusOK {
+			success++
+		} else if code == http.StatusUnauthorized {
+			reused++
+		}
+	}
+
+	if success != 1 || reused != 4 {
+		t.Fatalf("expected 1 success and 4 reused, got %d success and %d reused (codes: %v)", success, reused, results)
+	}
+}
+
+func TestHTTP_Lockout_EndToEnd(t *testing.T) {
+	s := newTestServer(t, serverOpts{})
+	d, _, email := registerAndLogin(t, s)
+	xff := uniqueXFF(t)
+
+	// The test server lockout schedule is MinFailures: 3, Wait: 100ms.
+	// 3 wrong passwords.
+	for i := 0; i < 3; i++ {
+		d.do("POST", "/api/v1/auth/login", fmt.Sprintf(`{"email":%q,"password":"wrong"}`, email), "", "", xff)
+	}
+
+	// Correct password while locked should fail.
+	resp, respBody := d.do("POST", "/api/v1/auth/login", fmt.Sprintf(`{"email":%q,"password":%q}`, email, testPassword), "", "", xff)
+	expectStatus(t, resp, http.StatusUnauthorized, respBody)
+	if decodeProblem(t, respBody)["code"] != "INVALID_CREDENTIALS" {
+		t.Errorf("expected INVALID_CREDENTIALS during lockout, got %v", decodeProblem(t, respBody)["code"])
+	}
+
+	// Wait for the lockout to expire (200ms to avoid flakes).
+	time.Sleep(200 * time.Millisecond)
+
+	// Correct password now should succeed.
+	resp, respBody = d.do("POST", "/api/v1/auth/login", fmt.Sprintf(`{"email":%q,"password":%q}`, email, testPassword), "", "", xff)
+	expectStatus(t, resp, http.StatusOK, respBody)
+}
+
+func TestHTTP_Logout_ServerSideReplay(t *testing.T) {
+	s := newTestServer(t, serverOpts{})
+	d, _, _ := registerAndLogin(t, s)
+	xff := uniqueXFF(t)
+
+	// Snapshot cookie
+	cookies := append([]*http.Cookie(nil), d.jar...)
+
+	// Logout
+	resp, _ := d.do("POST", "/api/v1/auth/logout", "", "", testOrigin, xff)
+	expectStatus(t, resp, http.StatusNoContent, nil)
+
+	// Attacker replays the old cookie.
+	ad := newDoer(t, s)
+	ad.jar = cookies
+	resp, respBody := ad.do("POST", "/api/v1/auth/refresh", "", "", testOrigin, xff)
+
+	// Must be 401 (family revoked).
+	expectStatus(t, resp, http.StatusUnauthorized, respBody)
+}
+
+func TestHTTP_CookieFlags(t *testing.T) {
+	s := newTestServer(t, serverOpts{SecureCookies: true})
+	d := newDoer(t, s)
+	xff := uniqueXFF(t)
+	email := uniqueEmail(t)
+
+	reg := fmt.Sprintf(`{"email":%q,"password":%q,"name":""}`, email, testPassword)
+	d.do("POST", "/api/v1/auth/register", reg, "", "", xff)
+
+	resp, _ := d.do("POST", "/api/v1/auth/login", fmt.Sprintf(`{"email":%q,"password":%q}`, email, testPassword), "", "", xff)
+	expectStatus(t, resp, http.StatusOK, nil)
+
+	cookies := resp.Cookies()
+	if len(cookies) == 0 {
+		t.Fatal("no cookies returned")
+	}
+
+	var refreshCookie *http.Cookie
+	for _, c := range cookies {
+		if c.Name == "refresh_token" {
+			refreshCookie = c
+		}
+	}
+	if refreshCookie == nil {
+		t.Fatal("refresh_token cookie missing")
+	}
+
+	if !refreshCookie.HttpOnly {
+		t.Error("HttpOnly must be true")
+	}
+	if !refreshCookie.Secure {
+		t.Error("Secure must be true when configured")
+	}
+	if refreshCookie.SameSite != http.SameSiteStrictMode {
+		t.Error("SameSite must be Strict")
+	}
+	if refreshCookie.Path != "/api/v1/auth" {
+		t.Errorf("Path = %q", refreshCookie.Path)
+	}
+}
+
+func TestHTTP_JWT_EdgeCases(t *testing.T) {
+	s := newTestServer(t, serverOpts{})
+	d := newDoer(t, s)
+
+	signID := domain.ID{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10}
+
+	t.Run("alg none", func(t *testing.T) {
+		token := golangjwt.NewWithClaims(golangjwt.SigningMethodNone, golangjwt.RegisteredClaims{
+			Subject:   signID.String(),
+			Issuer:    testIssuer,
+			Audience:  golangjwt.ClaimStrings{testAudience},
+			ExpiresAt: golangjwt.NewNumericDate(time.Now().Add(time.Hour)),
+		})
+		raw, _ := token.SignedString(golangjwt.UnsafeAllowNoneSignatureType)
+		resp, _ := d.do("GET", "/api/v1/me", "", raw, "", uniqueXFF(t))
+		expectStatus(t, resp, http.StatusUnauthorized, nil)
+	})
+
+	t.Run("wrong audience", func(t *testing.T) {
+		claims := golangjwt.RegisteredClaims{
+			Subject:   signID.String(),
+			Issuer:    testIssuer,
+			Audience:  golangjwt.ClaimStrings{"wrong-audience"},
+			ExpiresAt: golangjwt.NewNumericDate(time.Now().Add(time.Hour)),
+		}
+		token := golangjwt.NewWithClaims(golangjwt.SigningMethodEdDSA, claims)
+		token.Header["kid"] = "kid-test"
+		raw, _ := token.SignedString(sharedSignKey)
+		resp, _ := d.do("GET", "/api/v1/me", "", raw, "", uniqueXFF(t))
+		expectStatus(t, resp, http.StatusUnauthorized, nil)
+	})
+
+	t.Run("expired", func(t *testing.T) {
+		claims := golangjwt.RegisteredClaims{
+			Subject:   signID.String(),
+			Issuer:    testIssuer,
+			Audience:  golangjwt.ClaimStrings{testAudience},
+			ExpiresAt: golangjwt.NewNumericDate(time.Now().Add(-time.Hour)),
+		}
+		token := golangjwt.NewWithClaims(golangjwt.SigningMethodEdDSA, claims)
+		token.Header["kid"] = "kid-test"
+		raw, _ := token.SignedString(sharedSignKey)
+		resp, _ := d.do("GET", "/api/v1/me", "", raw, "", uniqueXFF(t))
+		expectStatus(t, resp, http.StatusUnauthorized, nil)
+	})
 }
