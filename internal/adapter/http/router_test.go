@@ -111,6 +111,7 @@ func TestRouter_RegisterRoutes(t *testing.T) {
 	h := buildTestRouter(t, allowAllLimiter{})
 	body := `{"email":"a@b.com","password":"correct-horse","name":""}`
 	r := httptest.NewRequest("POST", "/api/v1/auth/register", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, r)
 
@@ -123,6 +124,7 @@ func TestRouter_LoginRoutes(t *testing.T) {
 	h := buildTestRouter(t, allowAllLimiter{})
 	body := `{"email":"a@b.com","password":"correct-horse"}`
 	r := httptest.NewRequest("POST", "/api/v1/auth/login", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, r)
 
@@ -145,6 +147,7 @@ func TestRouter_AuthRateLimited(t *testing.T) {
 	h := buildTestRouter(t, denyAllLimiter{})
 	body := `{"email":"a@b.com","password":"x"}`
 	r := httptest.NewRequest("POST", "/api/v1/auth/login", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, r)
 
