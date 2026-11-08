@@ -18,16 +18,11 @@ var (
 	ErrInvalidRecordTTL = errors.New("lockout: record TTL must be positive and >= max wait")
 )
 
-// BackoffStep is one entry in the escalating-backoff schedule.
 type BackoffStep struct {
 	MinFailures int
 	Wait        time.Duration
 }
 
-// LockoutStore implements domain.LockoutStore. Failures are keyed on
-// (userID, ipPrefix) so one network cannot lock a user out from a different
-// network. Waits escalate with the failure count; the record expires after
-// recordTTL so a user who walks away gets a fresh start.
 type LockoutStore struct {
 	client    goredis.UniversalClient
 	schedule  []BackoffStep
@@ -63,28 +58,54 @@ func NewLockoutStore(client goredis.UniversalClient, schedule []BackoffStep, rec
 	}, nil
 }
 
+// Backoff checks both the IP-specific bucket and the global account bucket.
+// It returns the longer of the two waits.
 func (l *LockoutStore) Backoff(ctx context.Context, userID domain.ID, ipPrefix string) (time.Duration, error) {
-	untilMs, err := l.client.HGet(ctx, lockoutKey(userID, ipPrefix), "until").Int64()
+	ipKey := ipLockoutKey(userID, ipPrefix)
+	acctKey := accountLockoutKey(userID)
+	now := time.Now().UnixMilli()
+
+	ipWait, err := l.getRemaining(ctx, ipKey, now)
+	if err != nil {
+		return 0, err
+	}
+	acctWait, err := l.getRemaining(ctx, acctKey, now)
+	if err != nil {
+		return 0, err
+	}
+
+	if acctWait > ipWait {
+		return acctWait, nil
+	}
+	return ipWait, nil
+}
+
+func (l *LockoutStore) getRemaining(ctx context.Context, key string, nowMs int64) (time.Duration, error) {
+	untilMs, err := l.client.HGet(ctx, key, "until").Int64()
 	if errors.Is(err, goredis.Nil) {
 		return 0, nil
 	}
 	if err != nil {
 		return 0, fmt.Errorf("lockout backoff: %w", err)
 	}
-	wait := untilMs - time.Now().UnixMilli()
+	wait := untilMs - nowMs
 	if wait <= 0 {
 		return 0, nil
 	}
 	return time.Duration(wait) * time.Millisecond, nil
 }
 
+// RecordFailedAttempt increments both the IP and account counters atomically
+// and returns the maximum applicable wait.
 func (l *LockoutStore) RecordFailedAttempt(ctx context.Context, userID domain.ID, ipPrefix string) (time.Duration, error) {
 	args := make([]any, 0, 2+len(l.schedule)*2)
 	args = append(args, time.Now().UnixMilli(), int64(l.recordTTL.Seconds()))
 	for _, s := range l.schedule {
 		args = append(args, int64(s.MinFailures), s.Wait.Milliseconds())
 	}
-	waitMs, err := l.script.Run(ctx, l.client, []string{lockoutKey(userID, ipPrefix)}, args...).Int64()
+
+	keys := []string{ipLockoutKey(userID, ipPrefix), accountLockoutKey(userID)}
+	waitMs, err := l.script.Run(ctx, l.client, keys, args...).Int64()
 	if err != nil {
 		return 0, fmt.Errorf("lockout record: %w", err)
 	}
@@ -92,18 +113,24 @@ func (l *LockoutStore) RecordFailedAttempt(ctx context.Context, userID domain.ID
 }
 
 func (l *LockoutStore) Reset(ctx context.Context, userID domain.ID, ipPrefix string) error {
-	if err := l.client.Del(ctx, lockoutKey(userID, ipPrefix)).Err(); err != nil {
+	keys := []string{ipLockoutKey(userID, ipPrefix), accountLockoutKey(userID)}
+	if err := l.client.Del(ctx, keys...).Err(); err != nil {
 		return fmt.Errorf("lockout reset: %w", err)
 	}
 	return nil
 }
 
-func lockoutKey(userID domain.ID, ipPrefix string) string {
-	return "lockout:" + userID.String() + ":" + ipPrefix
+func ipLockoutKey(userID domain.ID, ipPrefix string) string {
+	return "lockout:ip:" + userID.String() + ":" + ipPrefix
+}
+
+func accountLockoutKey(userID domain.ID) string {
+	return "lockout:acct:" + userID.String()
 }
 
 const recordFailedLua = `
-local key        = KEYS[1]
+local key_ip     = KEYS[1]
+local key_acct   = KEYS[2]
 local now_ms     = tonumber(ARGV[1])
 local record_ttl = tonumber(ARGV[2])
 
@@ -112,18 +139,28 @@ for i = 3, #ARGV, 2 do
     thresholds[#thresholds+1] = {tonumber(ARGV[i]), tonumber(ARGV[i+1])}
 end
 
-local count = tonumber(redis.call('HGET', key, 'count')) or 0
-count = count + 1
-
-local new_wait = 0
+-- Increment IP-specific
+local count_ip = tonumber(redis.call('HGET', key_ip, 'count')) or 0
+count_ip = count_ip + 1
+local wait_ip = 0
 for _, pair in ipairs(thresholds) do
-    if count >= pair[1] then
-        new_wait = pair[2]
-    end
+    if count_ip >= pair[1] then wait_ip = pair[2] end
 end
+redis.call('HSET', key_ip, 'count', count_ip, 'until', now_ms + wait_ip)
+redis.call('EXPIRE', key_ip, record_ttl)
 
-redis.call('HSET', key, 'count', count, 'until', now_ms + new_wait)
-redis.call('EXPIRE', key, record_ttl)
+-- Increment Account-wide
+local count_acct = tonumber(redis.call('HGET', key_acct, 'count')) or 0
+count_acct = count_acct + 1
+local wait_acct = 0
+for _, pair in ipairs(thresholds) do
+    if count_acct >= pair[1] then wait_acct = pair[2] end
+end
+redis.call('HSET', key_acct, 'count', count_acct, 'until', now_ms + wait_acct)
+redis.call('EXPIRE', key_acct, record_ttl)
 
-return new_wait
+if wait_acct > wait_ip then
+    return wait_acct
+end
+return wait_ip
 `

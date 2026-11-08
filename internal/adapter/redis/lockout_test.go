@@ -103,31 +103,31 @@ func TestLockout_Escalation(t *testing.T) {
 	ls := mustLockout(t, c)
 	ctx := context.Background()
 
-	w, _ := ls.RecordFailedAttempt(ctx, lockUser1, "1.2.3.0/24") // count 1
+	w, _ := ls.RecordFailedAttempt(ctx, lockUser1, "1.2.3.0/24")
 	if w != 0 {
 		t.Errorf("F1: wait = %v, want 0", w)
 	}
-	w, _ = ls.RecordFailedAttempt(ctx, lockUser1, "1.2.3.0/24") // count 2 → tier 1
+	w, _ = ls.RecordFailedAttempt(ctx, lockUser1, "1.2.3.0/24")
 	if w != 100*time.Millisecond {
 		t.Errorf("F2: wait = %v, want 100ms", w)
 	}
 	time.Sleep(150 * time.Millisecond)
-	w, _ = ls.RecordFailedAttempt(ctx, lockUser1, "1.2.3.0/24") // count 3 → tier 1
+	w, _ = ls.RecordFailedAttempt(ctx, lockUser1, "1.2.3.0/24")
 	if w != 100*time.Millisecond {
 		t.Errorf("F3: wait = %v, want 100ms", w)
 	}
 	time.Sleep(150 * time.Millisecond)
-	w, _ = ls.RecordFailedAttempt(ctx, lockUser1, "1.2.3.0/24") // count 4 → tier 2
+	w, _ = ls.RecordFailedAttempt(ctx, lockUser1, "1.2.3.0/24")
 	if w != 500*time.Millisecond {
 		t.Errorf("F4: wait = %v, want 500ms", w)
 	}
 	time.Sleep(550 * time.Millisecond)
-	w, _ = ls.RecordFailedAttempt(ctx, lockUser1, "1.2.3.0/24") // count 5 → tier 2
+	w, _ = ls.RecordFailedAttempt(ctx, lockUser1, "1.2.3.0/24")
 	if w != 500*time.Millisecond {
 		t.Errorf("F5: wait = %v, want 500ms", w)
 	}
 	time.Sleep(550 * time.Millisecond)
-	w, _ = ls.RecordFailedAttempt(ctx, lockUser1, "1.2.3.0/24") // count 6 → tier 3
+	w, _ = ls.RecordFailedAttempt(ctx, lockUser1, "1.2.3.0/24")
 	if w != 2*time.Second {
 		t.Errorf("F6: wait = %v, want 2s", w)
 	}
@@ -178,6 +178,9 @@ func TestLockout_KeyIsolationByPrefix(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		_, _ = ls.RecordFailedAttempt(ctx, lockUser1, "1.2.3.0/24")
 	}
+
+	_ = c.Del(ctx, accountLockoutKey(lockUser1)).Err()
+
 	if w, _ := ls.Backoff(ctx, lockUser1, "9.9.9.0/24"); w != 0 {
 		t.Fatalf("different prefix should have no backoff, got %v", w)
 	}
@@ -204,12 +207,12 @@ func TestLockout_Concurrent(t *testing.T) {
 	close(start)
 	wg.Wait()
 
-	count, err := c.HGet(ctx, lockoutKey(lockUser1, "1.2.3.0/24"), "count").Int64()
+	count, err := c.HGet(ctx, ipLockoutKey(lockUser1, "1.2.3.0/24"), "count").Int64()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if count != int64(N) {
-		t.Fatalf("count = %d, want %d (Lua must serialize increments)", count, N)
+		t.Fatalf("count = %d, want %d", count, N)
 	}
 
 	w, _ := ls.Backoff(ctx, lockUser1, "1.2.3.0/24")
@@ -224,7 +227,7 @@ func TestLockout_TTLSets(t *testing.T) {
 	ctx := context.Background()
 
 	_, _ = ls.RecordFailedAttempt(ctx, lockUser1, "1.2.3.0/24")
-	ttl, err := c.TTL(ctx, lockoutKey(lockUser1, "1.2.3.0/24")).Result()
+	ttl, err := c.TTL(ctx, ipLockoutKey(lockUser1, "1.2.3.0/24")).Result()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -275,5 +278,36 @@ func TestNewLockoutStore_InvalidArgs(t *testing.T) {
 				t.Fatalf("want %v, got %v", tc.wantErr, err)
 			}
 		})
+	}
+}
+
+func TestLockout_AccountWideLimit(t *testing.T) {
+	c := setupRedis(t)
+	ls := mustLockout(t, c)
+	ctx := context.Background()
+
+	w1, _ := ls.RecordFailedAttempt(ctx, lockUser1, "1.1.1.0/24")
+	if w1 != 0 {
+		t.Fatalf("expected no IP lock on 1st fail, got %v", w1)
+	}
+
+	w2, _ := ls.RecordFailedAttempt(ctx, lockUser1, "2.2.2.0/24")
+	if w2 != 100*time.Millisecond {
+		t.Fatalf("expected account lock on 2nd fail, got %v", w2)
+	}
+
+	w3, _ := ls.RecordFailedAttempt(ctx, lockUser1, "3.3.3.0/24")
+	if w3 != 100*time.Millisecond {
+		t.Fatalf("expected account lock on 3rd fail, got %v", w3)
+	}
+
+	w4, _ := ls.RecordFailedAttempt(ctx, lockUser1, "4.4.4.0/24")
+	if w4 != 500*time.Millisecond {
+		t.Fatalf("expected account lock on 4th fail, got %v", w4)
+	}
+
+	wCheck, _ := ls.Backoff(ctx, lockUser1, "9.9.9.0/24")
+	if wCheck < 490*time.Millisecond || wCheck > 500*time.Millisecond {
+		t.Fatalf("backoff from new IP = %v, want ~500ms", wCheck)
 	}
 }

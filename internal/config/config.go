@@ -64,7 +64,7 @@ type Config struct {
 	RateLimitGlobalCapacity int           `env:"RATE_LIMIT_GLOBAL_CAPACITY" envDefault:"100"`
 	RateLimitGlobalWindow   time.Duration `env:"RATE_LIMIT_GLOBAL_WINDOW"   envDefault:"1m"`
 
-	LockoutSchedule  string        `env:"LOCKOUT_SCHEDULE"   envDefault:"2:100ms,4:500ms,6:2s,10:30s,20:5m"`
+	LockoutSchedule  string        `env:"LOCKOUT_SCHEDULE"   envDefault:"3:100ms,10:1m,20:15m"`
 	LockoutRecordTTL time.Duration `env:"LOCKOUT_RECORD_TTL" envDefault:"24h"`
 }
 
