@@ -382,6 +382,7 @@ func registerAndLogin(t *testing.T, s *testServer) (*httpDoer, string, string) {
 // ---------- Register ----------
 
 func TestHTTP_Register_Success(t *testing.T) {
+	t.Parallel()
 	s := newTestServer(t, serverOpts{})
 	d := newDoer(t, s)
 	email := uniqueEmail(t)
@@ -406,6 +407,7 @@ func TestHTTP_Register_Success(t *testing.T) {
 }
 
 func TestHTTP_Register_Duplicate_409(t *testing.T) {
+	t.Parallel()
 	s := newTestServer(t, serverOpts{})
 	d := newDoer(t, s)
 	email := uniqueEmail(t)
@@ -423,6 +425,7 @@ func TestHTTP_Register_Duplicate_409(t *testing.T) {
 }
 
 func TestHTTP_Register_WeakPassword_400(t *testing.T) {
+	t.Parallel()
 	s := newTestServer(t, serverOpts{})
 	d := newDoer(t, s)
 
@@ -435,6 +438,7 @@ func TestHTTP_Register_WeakPassword_400(t *testing.T) {
 }
 
 func TestHTTP_Register_InvalidJSON_400(t *testing.T) {
+	t.Parallel()
 	s := newTestServer(t, serverOpts{})
 	d := newDoer(t, s)
 	resp, respBody := d.do("POST", "/api/v1/auth/register", "not json", "", "", uniqueXFF(t))
@@ -447,6 +451,7 @@ func TestHTTP_Register_InvalidJSON_400(t *testing.T) {
 // ---------- Login ----------
 
 func TestHTTP_Login_WrongPassword_401(t *testing.T) {
+	t.Parallel()
 	s := newTestServer(t, serverOpts{})
 	d := newDoer(t, s)
 	xff := uniqueXFF(t)
@@ -464,6 +469,7 @@ func TestHTTP_Login_WrongPassword_401(t *testing.T) {
 }
 
 func TestHTTP_Login_UnknownEmail_401(t *testing.T) {
+	t.Parallel()
 	s := newTestServer(t, serverOpts{})
 	d := newDoer(t, s)
 
@@ -477,6 +483,7 @@ func TestHTTP_Login_UnknownEmail_401(t *testing.T) {
 }
 
 func TestHTTP_Login_DisabledAccount_401(t *testing.T) {
+	t.Parallel()
 	s := newTestServer(t, serverOpts{})
 	d, _, email := registerAndLogin(t, s)
 
@@ -495,6 +502,7 @@ func TestHTTP_Login_DisabledAccount_401(t *testing.T) {
 // ---------- /me ----------
 
 func TestHTTP_Me_NoToken_401(t *testing.T) {
+	t.Parallel()
 	s := newTestServer(t, serverOpts{})
 	d := newDoer(t, s)
 	resp, respBody := d.do("GET", "/api/v1/me", "", "", "", uniqueXFF(t))
@@ -505,6 +513,7 @@ func TestHTTP_Me_NoToken_401(t *testing.T) {
 }
 
 func TestHTTP_Me_ValidToken_200(t *testing.T) {
+	t.Parallel()
 	s := newTestServer(t, serverOpts{})
 	d, token, email := registerAndLogin(t, s)
 
@@ -522,6 +531,7 @@ func TestHTTP_Me_ValidToken_200(t *testing.T) {
 }
 
 func TestHTTP_Me_WrongSignature_401(t *testing.T) {
+	t.Parallel()
 	s := newTestServer(t, serverOpts{})
 	d := newDoer(t, s)
 
@@ -539,6 +549,7 @@ func TestHTTP_Me_WrongSignature_401(t *testing.T) {
 // ---------- Refresh ----------
 
 func TestHTTP_Refresh_HappyPath(t *testing.T) {
+	t.Parallel()
 	s := newTestServer(t, serverOpts{})
 	d, token, _ := registerAndLogin(t, s)
 
@@ -556,6 +567,7 @@ func TestHTTP_Refresh_HappyPath(t *testing.T) {
 // THE critical test: replay an already-rotated refresh token. Family must
 // be revoked, and the legitimate successor token must also stop working.
 func TestHTTP_Refresh_ReplayRevokesFamily(t *testing.T) {
+	t.Parallel()
 	s := newTestServer(t, serverOpts{})
 	d, _, email := registerAndLogin(t, s)
 	xff := uniqueXFF(t)
@@ -629,6 +641,7 @@ func TestHTTP_Refresh_ReplayRevokesFamily(t *testing.T) {
 }
 
 func TestHTTP_Refresh_MissingCookie_401(t *testing.T) {
+	t.Parallel()
 	s := newTestServer(t, serverOpts{})
 	d := newDoer(t, s)
 	resp, respBody := d.do("POST", "/api/v1/auth/refresh", "", "", testOrigin, uniqueXFF(t))
@@ -638,6 +651,7 @@ func TestHTTP_Refresh_MissingCookie_401(t *testing.T) {
 // ---------- Logout ----------
 
 func TestHTTP_Logout_ThenRefresh_Fails(t *testing.T) {
+	t.Parallel()
 	s := newTestServer(t, serverOpts{})
 	d, _, _ := registerAndLogin(t, s)
 	xff := uniqueXFF(t)
@@ -659,6 +673,7 @@ func TestHTTP_Logout_ThenRefresh_Fails(t *testing.T) {
 // ---------- Rate limiting ----------
 
 func TestHTTP_AuthRateLimit_429(t *testing.T) {
+	t.Parallel()
 	limitedLimiter, _ := adapterredis.NewLimiter(sharedRedis, 2, time.Minute)
 	s := newTestServer(t, serverOpts{
 		AuthLimiter:  &bridgeLimiter{inner: limitedLimiter},
@@ -688,6 +703,7 @@ func TestHTTP_AuthRateLimit_429(t *testing.T) {
 // ---------- Redis down ----------
 
 func TestHTTP_RedisDown_NoFallback_503(t *testing.T) {
+	t.Parallel()
 	deadRedis := goredis.NewClient(&goredis.Options{
 		Addr:        "127.0.0.1:1",
 		DialTimeout: 100 * time.Millisecond,
@@ -712,6 +728,7 @@ func TestHTTP_RedisDown_NoFallback_503(t *testing.T) {
 }
 
 func TestHTTP_RedisDown_WithFallback_EnforcesLimit(t *testing.T) {
+	t.Parallel()
 	deadRedis := goredis.NewClient(&goredis.Options{
 		Addr:        "127.0.0.1:1",
 		DialTimeout: 100 * time.Millisecond,
@@ -747,6 +764,7 @@ func TestHTTP_RedisDown_WithFallback_EnforcesLimit(t *testing.T) {
 // ---------- CORS + Origin ----------
 
 func TestHTTP_CORS_Preflight_Allowed(t *testing.T) {
+	t.Parallel()
 	s := newTestServer(t, serverOpts{})
 	d := newDoer(t, s)
 	req, _ := http.NewRequest("OPTIONS", d.baseURL+"/api/v1/auth/login", nil)
@@ -767,6 +785,7 @@ func TestHTTP_CORS_Preflight_Allowed(t *testing.T) {
 }
 
 func TestHTTP_CORS_Preflight_Disallowed_403(t *testing.T) {
+	t.Parallel()
 	s := newTestServer(t, serverOpts{})
 	d := newDoer(t, s)
 	req, _ := http.NewRequest("OPTIONS", d.baseURL+"/api/v1/auth/login", nil)
@@ -784,6 +803,7 @@ func TestHTTP_CORS_Preflight_Disallowed_403(t *testing.T) {
 }
 
 func TestHTTP_OriginCheck_DisallowedOrigin_403(t *testing.T) {
+	t.Parallel()
 	s := newTestServer(t, serverOpts{})
 	d, _, _ := registerAndLogin(t, s)
 
@@ -795,6 +815,7 @@ func TestHTTP_OriginCheck_DisallowedOrigin_403(t *testing.T) {
 // ---------- Body limits ----------
 
 func TestHTTP_BodyLimit_AuthEndpoint_413(t *testing.T) {
+	t.Parallel()
 	s := newTestServer(t, serverOpts{})
 	d := newDoer(t, s)
 
@@ -811,6 +832,7 @@ func TestHTTP_BodyLimit_AuthEndpoint_413(t *testing.T) {
 // ---------- Profile + addresses + sessions ----------
 
 func TestHTTP_UpdateMe_EmptyPatch_400(t *testing.T) {
+	t.Parallel()
 	s := newTestServer(t, serverOpts{})
 	d, token, _ := registerAndLogin(t, s)
 
@@ -822,6 +844,7 @@ func TestHTTP_UpdateMe_EmptyPatch_400(t *testing.T) {
 }
 
 func TestHTTP_UpdateMe_Success(t *testing.T) {
+	t.Parallel()
 	s := newTestServer(t, serverOpts{})
 	d, token, _ := registerAndLogin(t, s)
 
@@ -839,6 +862,7 @@ func TestHTTP_UpdateMe_Success(t *testing.T) {
 }
 
 func TestHTTP_Addresses_CreateAndList(t *testing.T) {
+	t.Parallel()
 	s := newTestServer(t, serverOpts{})
 	d, token, _ := registerAndLogin(t, s)
 	xff := uniqueXFF(t)
@@ -861,6 +885,7 @@ func TestHTTP_Addresses_CreateAndList(t *testing.T) {
 }
 
 func TestHTTP_Sessions_ListAndRevoke(t *testing.T) {
+	t.Parallel()
 	s := newTestServer(t, serverOpts{})
 	d, token, _ := registerAndLogin(t, s)
 	xff := uniqueXFF(t)
@@ -885,6 +910,7 @@ func TestHTTP_Sessions_ListAndRevoke(t *testing.T) {
 // ---------- misc ----------
 
 func TestHTTP_NotFound(t *testing.T) {
+	t.Parallel()
 	s := newTestServer(t, serverOpts{})
 	d := newDoer(t, s)
 	resp, respBody := d.do("GET", "/nonexistent", "", "", "", uniqueXFF(t))
@@ -892,6 +918,7 @@ func TestHTTP_NotFound(t *testing.T) {
 }
 
 func TestHTTP_RequestIDPresent(t *testing.T) {
+	t.Parallel()
 	s := newTestServer(t, serverOpts{})
 	d := newDoer(t, s)
 
@@ -910,6 +937,7 @@ func TestHTTP_RequestIDPresent(t *testing.T) {
 }
 
 func TestHTTP_Refresh_Concurrent(t *testing.T) {
+	t.Parallel()
 	s := newTestServer(t, serverOpts{})
 	d, _, _ := registerAndLogin(t, s)
 	xff := uniqueXFF(t)
@@ -939,9 +967,10 @@ func TestHTTP_Refresh_Concurrent(t *testing.T) {
 
 	success, reused := 0, 0
 	for _, code := range results {
-		if code == http.StatusOK {
+		switch code {
+		case http.StatusOK:
 			success++
-		} else if code == http.StatusUnauthorized {
+		case http.StatusUnauthorized:
 			reused++
 		}
 	}
@@ -952,6 +981,7 @@ func TestHTTP_Refresh_Concurrent(t *testing.T) {
 }
 
 func TestHTTP_Lockout_EndToEnd(t *testing.T) {
+	t.Parallel()
 	s := newTestServer(t, serverOpts{})
 	d, _, email := registerAndLogin(t, s)
 	xff := uniqueXFF(t)
@@ -978,6 +1008,7 @@ func TestHTTP_Lockout_EndToEnd(t *testing.T) {
 }
 
 func TestHTTP_Logout_ServerSideReplay(t *testing.T) {
+	t.Parallel()
 	s := newTestServer(t, serverOpts{})
 	d, _, _ := registerAndLogin(t, s)
 	xff := uniqueXFF(t)
@@ -999,6 +1030,7 @@ func TestHTTP_Logout_ServerSideReplay(t *testing.T) {
 }
 
 func TestHTTP_CookieFlags(t *testing.T) {
+	t.Parallel()
 	s := newTestServer(t, serverOpts{SecureCookies: true})
 	d := newDoer(t, s)
 	xff := uniqueXFF(t)
@@ -1040,6 +1072,7 @@ func TestHTTP_CookieFlags(t *testing.T) {
 }
 
 func TestHTTP_JWT_EdgeCases(t *testing.T) {
+	t.Parallel()
 	s := newTestServer(t, serverOpts{})
 	d := newDoer(t, s)
 
@@ -1084,4 +1117,35 @@ func TestHTTP_JWT_EdgeCases(t *testing.T) {
 		resp, _ := d.do("GET", "/api/v1/me", "", raw, "", uniqueXFF(t))
 		expectStatus(t, resp, http.StatusUnauthorized, nil)
 	})
+}
+
+func TestHTTP_JWT_TamperedPayload(t *testing.T) {
+	t.Parallel()
+	s := newTestServer(t, serverOpts{})
+	d := newDoer(t, s)
+
+	// 1. Get a valid token
+	fakeID := domain.ID{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10}
+	raw, _ := sharedKS.Sign(fakeID.String(), string(domain.RoleCustomer), time.Hour)
+
+	// 2. Tamper with the payload (change customer to admin)
+	parts := strings.Split(raw, ".")
+	if len(parts) != 3 {
+		t.Fatal("invalid token format")
+	}
+
+	// Decode payload, change role, re-encode
+	payloadBytes, _ := base64.RawURLEncoding.DecodeString(parts[1])
+	var claims map[string]any
+	_ = json.Unmarshal(payloadBytes, &claims)
+	claims["role"] = "admin"
+	newPayloadBytes, _ := json.Marshal(claims)
+	parts[1] = base64.RawURLEncoding.EncodeToString(newPayloadBytes)
+
+	// 3. Reassemble (keeping the original signature)
+	tamperedToken := strings.Join(parts, ".")
+
+	// 4. Send the tampered token
+	resp, _ := d.do("GET", "/api/v1/me", "", tamperedToken, "", uniqueXFF(t))
+	expectStatus(t, resp, http.StatusUnauthorized, nil)
 }

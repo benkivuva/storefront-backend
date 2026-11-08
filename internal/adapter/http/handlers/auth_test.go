@@ -81,6 +81,7 @@ func TestRegister_Success(t *testing.T) {
 
 	body := `{"email":"user@example.com","password":"correct-horse","name":"Alice"}`
 	r := httptest.NewRequest("POST", "/api/v1/auth/register", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
 	r.RemoteAddr = "1.2.3.4:5678"
 	rec := httptest.NewRecorder()
 	h.Register(rec, r)
@@ -113,6 +114,7 @@ type dtoRegisterResponse struct {
 func TestRegister_InvalidJSON_400(t *testing.T) {
 	h := newAuthHandler(t, &fakeAuthService{})
 	r := httptest.NewRequest("POST", "/api/v1/auth/register", strings.NewReader(`not json`))
+	r.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	h.Register(rec, r)
 
@@ -125,6 +127,7 @@ func TestRegister_UnknownField_400(t *testing.T) {
 	h := newAuthHandler(t, &fakeAuthService{})
 	body := `{"email":"a@b.com","password":"x","name":"","admin":true}`
 	r := httptest.NewRequest("POST", "/api/v1/auth/register", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	h.Register(rec, r)
 
@@ -138,6 +141,7 @@ func TestRegister_ServiceError_400(t *testing.T) {
 	h := newAuthHandler(t, svc)
 	body := `{"email":"bad","password":"x","name":""}`
 	r := httptest.NewRequest("POST", "/api/v1/auth/register", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	h.Register(rec, r)
 
@@ -152,6 +156,7 @@ func TestRegister_EmailTaken_409(t *testing.T) {
 	h := newAuthHandler(t, svc)
 	body := `{"email":"a@b.com","password":"x","name":""}`
 	r := httptest.NewRequest("POST", "/api/v1/auth/register", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	h.Register(rec, r)
 
@@ -173,6 +178,7 @@ func TestLogin_Success(t *testing.T) {
 
 	body := `{"email":"user@example.com","password":"correct-horse"}`
 	r := httptest.NewRequest("POST", "/api/v1/auth/login", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
 	r.RemoteAddr = "1.2.3.4:5678"
 	r.Header.Set("User-Agent", "test-agent")
 	rec := httptest.NewRecorder()
@@ -228,6 +234,7 @@ func TestLogin_InvalidCredentials_401(t *testing.T) {
 	h := newAuthHandler(t, svc)
 	body := `{"email":"a@b.com","password":"x"}`
 	r := httptest.NewRequest("POST", "/api/v1/auth/login", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	h.Login(rec, r)
 
@@ -248,6 +255,7 @@ func TestRefresh_Success(t *testing.T) {
 	h := newAuthHandler(t, svc)
 
 	r := httptest.NewRequest("POST", "/api/v1/auth/refresh", nil)
+	r.Header.Set("Content-Type", "application/json")
 	r.AddCookie(&http.Cookie{
 		Name:  refreshCookieName,
 		Value: base64.RawURLEncoding.EncodeToString(testRefreshRaw),
@@ -276,6 +284,7 @@ func TestRefresh_Success(t *testing.T) {
 func TestRefresh_MissingCookie_401(t *testing.T) {
 	h := newAuthHandler(t, &fakeAuthService{})
 	r := httptest.NewRequest("POST", "/api/v1/auth/refresh", nil)
+	r.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	h.Refresh(rec, r)
 
@@ -289,6 +298,7 @@ func TestRefresh_ServiceError_ClearsCookie(t *testing.T) {
 	h := newAuthHandler(t, svc)
 
 	r := httptest.NewRequest("POST", "/api/v1/auth/refresh", nil)
+	r.Header.Set("Content-Type", "application/json")
 	r.AddCookie(&http.Cookie{
 		Name:  refreshCookieName,
 		Value: base64.RawURLEncoding.EncodeToString(testRefreshRaw),
@@ -310,6 +320,7 @@ func TestLogout_Success(t *testing.T) {
 	h := newAuthHandler(t, svc)
 
 	r := httptest.NewRequest("POST", "/api/v1/auth/logout", nil)
+	r.Header.Set("Content-Type", "application/json")
 	r.AddCookie(&http.Cookie{
 		Name:  refreshCookieName,
 		Value: base64.RawURLEncoding.EncodeToString(testRefreshRaw),
@@ -334,6 +345,7 @@ func TestLogout_NoCookie_StillClearsAndReturns204(t *testing.T) {
 	h := newAuthHandler(t, svc)
 
 	r := httptest.NewRequest("POST", "/api/v1/auth/logout", nil)
+	r.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	h.Logout(rec, r)
 

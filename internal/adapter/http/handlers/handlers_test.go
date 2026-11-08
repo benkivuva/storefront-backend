@@ -40,3 +40,13 @@ func TestHandleDecodeError_WrappedBodyTooLarge_413(t *testing.T) {
 		t.Fatalf("status = %d, want 413", rec.Code)
 	}
 }
+
+func TestHandleDecodeError_UnsupportedMedia_415(t *testing.T) {
+	rec := httptest.NewRecorder()
+	handleDecodeError(rec, errUnsupportedMediaType)
+
+	if rec.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("status = %d, want 415", rec.Code)
+	}
+	assertProblemCode(t, rec.Body.Bytes(), "UNSUPPORTED_MEDIA_TYPE")
+}

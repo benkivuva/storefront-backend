@@ -8,14 +8,23 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/benkivuva/storefront-backend/internal/adapter/http/dto"
 	"github.com/benkivuva/storefront-backend/internal/adapter/http/middleware"
 )
 
-var errDecodeRequest = errors.New("handlers: invalid request body")
+var (
+	errDecodeRequest        = errors.New("handlers: invalid request body")
+	errUnsupportedMediaType = errors.New("handlers: unsupported media type")
+)
 
 func decodeJSON(r *http.Request, dst any) error {
+	ct := r.Header.Get("Content-Type")
+	if !strings.HasPrefix(ct, "application/json") {
+		return errUnsupportedMediaType
+	}
+
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(dst); err != nil {
@@ -30,15 +39,15 @@ func decodeJSON(r *http.Request, dst any) error {
 	return nil
 }
 
-// handleDecodeError writes 413 for a body-too-large read (surfaced through
-// the BodyLimit stream wrapper), 400 for any other decode failure.
 func handleDecodeError(w http.ResponseWriter, err error) {
-	if errors.Is(err, middleware.ErrBodyTooLarge) {
-		dto.WriteProblem(w, http.StatusRequestEntityTooLarge,
-			"BODY_TOO_LARGE", "request body too large")
-		return
+	switch {
+	case errors.Is(err, middleware.ErrBodyTooLarge):
+		dto.WriteProblem(w, http.StatusRequestEntityTooLarge, "BODY_TOO_LARGE", "request body too large")
+	case errors.Is(err, errUnsupportedMediaType):
+		dto.WriteProblem(w, http.StatusUnsupportedMediaType, "UNSUPPORTED_MEDIA_TYPE", "content-type must be application/json")
+	default:
+		dto.WriteProblem(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid request body")
 	}
-	dto.WriteProblem(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid request body")
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

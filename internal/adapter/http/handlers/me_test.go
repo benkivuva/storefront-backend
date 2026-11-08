@@ -69,6 +69,7 @@ func authedRequest(method, target string, body string) *http.Request {
 	var r *http.Request
 	if body != "" {
 		r = httptest.NewRequest(method, target, strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/json")
 	} else {
 		r = httptest.NewRequest(method, target, nil)
 	}
