@@ -90,5 +90,11 @@ func NewInternalRouter(ready *Ready) chi.Router {
 	r.Method(http.MethodGet, "/healthz", HealthHandler())
 	r.Method(http.MethodGet, "/readyz", ready.Handler())
 	r.Method(http.MethodGet, "/metrics", promhttp.Handler())
+	r.Get("/api/v1/openapi.yaml", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, "../../api/openapi.yaml")
+	})
+	r.Get("/api/v1/docs", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, "../../api/docs.html")
+	})
 	return r
 }

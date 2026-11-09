@@ -1,0 +1,180 @@
+openapi: 3.1.0
+info:
+  title: Storefront Backend API
+  version: 1.0.0
+  description: The REST API for the Storefront.
+servers:
+  - url: http://localhost:8080
+    description: Local Development
+  - url: https://api.storefront.co.ke
+    description: Production
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    Problem:
+      type: object
+      properties:
+        type:
+          type: string
+          example: "about:blank"
+        title:
+          type: string
+          example: "invalid credentials"
+        status:
+          type: integer
+          example: 401
+        code:
+          type: string
+          example: "INVALID_CREDENTIALS"
+      required: [type, title, status, code]
+
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: "01a1b6cb-1ad0-73ed-8806-844c124b44a6"
+        email:
+          type: string
+          format: email
+          example: "user@example.com"
+        name:
+          type: string
+          example: "Alice"
+        role:
+          type: string
+          enum: [customer, admin]
+          example: "customer"
+        phone:
+          type: string
+          example: "+254712345678"
+        is_email_verified:
+          type: boolean
+          example: false
+        created_at:
+          type: string
+          format: date-time
+      required: [id, email, role, is_email_verified, created_at]
+
+    RegisterRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 8
+        name:
+          type: string
+      required: [email, password]
+
+    LoginRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+      required: [email, password]
+
+    LoginResponse:
+      type: object
+      properties:
+        access_token:
+          type: string
+          example: "eyJhbGciOiJFZERTQSIs..."
+        user:
+          $ref: '#/components/schemas/User'
+      required: [access_token, user]
+
+paths:
+  /api/v1/auth/register:
+    post:
+      summary: Register a new user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: User created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    $ref: '#/components/schemas/User'
+        '400':
+          description: Invalid input (e.g., weak password, bad email)
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: Email already registered
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+
+  /api/v1/auth/login:
+    post:
+      summary: Authenticate a user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Login successful
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+                example: "refresh_token=...; HttpOnly; Secure; SameSite=Strict; Path=/api/v1/auth"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '401':
+          description: Invalid credentials
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+
+  /api/v1/me:
+    get:
+      summary: Get current user profile
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Profile retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    $ref: '#/components/schemas/User'
+        '401':
+          description: Unauthorized
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
