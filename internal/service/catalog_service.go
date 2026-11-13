@@ -138,13 +138,31 @@ func (s *CatalogService) AdjustStock(ctx context.Context, productID domain.ID, d
 }
 
 func (s *CatalogService) ListProducts(ctx context.Context, limit int, cursor string) ([]domain.Product, error) {
-	var cursorTime time.Time
-	if cursor != "" {
-		t, err := time.Parse(time.RFC3339, cursor)
-		if err != nil {
-			return nil, fmt.Errorf("invalid cursor: %w", err)
+	// Create a cache key that varies based on limit and cursor
+	key := fmt.Sprintf("products:list:%d:%s", limit, cursor)
+
+	data, err := s.cache.GetOrFetch(ctx, key, 60*time.Second, func() ([]byte, error) {
+		var cursorTime time.Time
+		if cursor != "" {
+			t, err := time.Parse(time.RFC3339, cursor)
+			if err != nil {
+				return nil, fmt.Errorf("invalid cursor: %w", err)
+			}
+			cursorTime = t
 		}
-		cursorTime = t
+		ps, err := s.products.List(ctx, limit, cursorTime)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(ps) // Product has MarshalJSON, so this works perfectly
+	})
+	if err != nil {
+		return nil, err
 	}
-	return s.products.List(ctx, limit, cursorTime)
+
+	var ps []domain.Product
+	if err := json.Unmarshal(data, &ps); err != nil {
+		return nil, fmt.Errorf("catalog: unmarshal products list: %w", err)
+	}
+	return ps, nil
 }
