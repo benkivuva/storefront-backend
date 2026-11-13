@@ -47,6 +47,7 @@ func TestMigrations_RoundTrip(t *testing.T) {
 		"password_reset_tokens",
 		"products",
 		"refresh_tokens",
+		"stock_movements",
 		"tax_rates",
 		"users",
 	}
