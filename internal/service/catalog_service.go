@@ -93,6 +93,15 @@ func (s *CatalogService) CreateProduct(ctx context.Context, sku, name, desc stri
 		return domain.Product{}, err
 	}
 
+	// NEW: Create the inventory row with 0 stock
+	inv, err := domain.NewInventory(p.ID(), 0, 10, now)
+	if err != nil {
+		return domain.Product{}, err
+	}
+	if err := s.inventory.Create(ctx, inv); err != nil {
+		return domain.Product{}, err
+	}
+
 	payload, _ := json.Marshal(p)
 	_ = s.outbox.Create(ctx, domain.OutboxEvent{
 		ID: s.ids.NewID(), AggregateType: "product", AggregateID: p.ID(),
