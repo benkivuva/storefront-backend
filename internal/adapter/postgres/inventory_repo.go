@@ -55,3 +55,17 @@ func toNullUUID(id domain.ID) interface{} {
 	}
 	return toUUID(id)
 }
+
+func (r *InventoryRepo) Create(ctx context.Context, inv domain.Inventory) error {
+	_, err := r.pool.Exec(ctx, `
+INSERT INTO inventory (product_id, available, low_stock_threshold, updated_at)
+VALUES ($1, $2, $3, $4)`,
+		toUUID(inv.ProductID()), inv.Available(), inv.Threshold(), inv.UpdatedAt())
+	if err != nil {
+		if isUniqueViolation(err) {
+			return domain.ErrConflict
+		}
+		return fmt.Errorf("inventory create: %w", err)
+	}
+	return nil
+}

@@ -1,0 +1,6 @@
+sku,name,category,price_minor,tax_class,stock
+SNK-001,Unga wa Jogoo 2kg,Groceries,21600,ZERO_RATED,100
+SNK-002,Coca-Cola 500ml,Beverages,7000,STANDARD_16,50
+ELC-001,HP Laptop 15,Electronics,6500000,STANDARD_16,5
+HSE-001,Plastic Basin,Household,35000,STANDARD_16,20
+MED-001,Panadol Extra,Pharmacy,15000,EXEMPT,200
