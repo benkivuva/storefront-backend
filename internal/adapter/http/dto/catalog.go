@@ -38,6 +38,14 @@ func FromProduct(p domain.Product) Product {
 	}
 }
 
+func FromProducts(ps []domain.Product) []Product {
+	out := make([]Product, len(ps))
+	for i, p := range ps {
+		out[i] = FromProduct(p)
+	}
+	return out
+}
+
 type ProductsResponse struct {
 	Products []Product `json:"products"`
 }
@@ -62,22 +70,34 @@ func FromCategory(c domain.Category) Category {
 	}
 }
 
-type CategoriesResponse struct {
-	Categories []Category `json:"categories"`
-}
-
-func FromProducts(ps []domain.Product) []Product {
-	out := make([]Product, len(ps))
-	for i, p := range ps {
-		out[i] = FromProduct(p)
-	}
-	return out
-}
-
 func FromCategories(cs []domain.Category) []Category {
 	out := make([]Category, len(cs))
 	for i, c := range cs {
 		out[i] = FromCategory(c)
+	}
+	return out
+}
+
+type CategoriesResponse struct {
+	Categories []Category `json:"categories"`
+}
+
+type LowStockItem struct {
+	ProductID string    `json:"product_id"`
+	Available int       `json:"available"`
+	Threshold int       `json:"threshold"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+func FromInventories(invs []domain.Inventory) []LowStockItem {
+	out := make([]LowStockItem, len(invs))
+	for i, inv := range invs {
+		out[i] = LowStockItem{
+			ProductID: inv.ProductID().String(),
+			Available: inv.Available(),
+			Threshold: inv.Threshold(),
+			UpdatedAt: inv.UpdatedAt(),
+		}
 	}
 	return out
 }

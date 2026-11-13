@@ -51,6 +51,16 @@ func NewInventory(productID ID, available, threshold int, at time.Time) (Invento
 	}, nil
 }
 
+// RehydrateInventory rebuilds an Inventory from persisted state without validation.
+func RehydrateInventory(productID ID, available, threshold int, at time.Time) Inventory {
+	return Inventory{
+		productID:         productID,
+		available:         available,
+		lowStockThreshold: threshold,
+		updatedAt:         at,
+	}
+}
+
 func (i Inventory) ProductID() ID        { return i.productID }
 func (i Inventory) Available() int       { return i.available }
 func (i Inventory) Threshold() int       { return i.lowStockThreshold }

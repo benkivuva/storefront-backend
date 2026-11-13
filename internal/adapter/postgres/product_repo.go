@@ -56,14 +56,12 @@ func (r *ProductRepo) GetByID(ctx context.Context, id domain.ID) (domain.Product
 	return p, err
 }
 
-// Update enforces optimistic concurrency using the version field.
 func (r *ProductRepo) Update(ctx context.Context, p domain.Product) error {
 	var catID pgtype.UUID
 	if !p.CategoryID().IsZero() {
 		catID = toUUID(p.CategoryID())
 	}
 
-	// The WHERE clause includes the expected version. If another admin updated it, this matches 0 rows.
 	tag, err := r.pool.Exec(ctx, `
 UPDATE products SET
 name = $2, description = $3, category_id = $4, 
@@ -72,7 +70,7 @@ version = $8, updated_at = $9
 WHERE id = $1 AND version = $10 AND deleted_at IS NULL`,
 		toUUID(p.ID()), p.Name(), strOrNil(p.Description()), catID,
 		p.Price().AmountMinor(), string(p.TaxClass()), strOrNil(p.EtimsItemCode()),
-		p.Version(), p.UpdatedAt(), p.Version()-1) // expected old version is new version - 1
+		p.Version(), p.UpdatedAt(), p.Version()-1)
 
 	if err != nil {
 		return fmt.Errorf("product update: %w", err)
@@ -83,19 +81,54 @@ WHERE id = $1 AND version = $10 AND deleted_at IS NULL`,
 	return nil
 }
 
-func (r *ProductRepo) List(ctx context.Context, limit int, cursor time.Time) ([]domain.Product, error) {
-	query := productSelect + " WHERE deleted_at IS NULL"
-	args := []any{}
+func (r *ProductRepo) Delete(ctx context.Context, id domain.ID, at time.Time) error {
+	tag, err := r.pool.Exec(ctx, `
+UPDATE products SET deleted_at = $2, updated_at = $2, version = version + 1
+WHERE id = $1 AND deleted_at IS NULL`,
+		toUUID(id), at)
+	if err != nil {
+		return fmt.Errorf("product delete: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.ErrNotFound
+	}
+	return nil
+}
 
-	if !cursor.IsZero() {
-		query += " AND created_at < $1"
-		args = append(args, cursor)
-	} else {
-		query += " AND $1::timestamptz IS NULL"
-		args = append(args, nil)
+func (r *ProductRepo) List(ctx context.Context, f domain.ListFilters, limit int, cursor time.Time) ([]domain.Product, error) {
+	query := productSelect + " WHERE deleted_at IS NULL"
+	args := []interface{}{}
+	argCount := 1
+
+	if f.CategoryID != "" {
+		query += fmt.Sprintf(" AND category_id = $%d::uuid", argCount)
+		args = append(args, f.CategoryID)
+		argCount++
+	}
+	if f.Query != "" {
+		query += fmt.Sprintf(" AND to_tsvector('simple', name || ' ' || coalesce(description, '')) @@ plainto_tsquery('simple', $%d)", argCount)
+		args = append(args, f.Query)
+		argCount++
+	}
+	if f.MinPrice > 0 {
+		query += fmt.Sprintf(" AND price_minor >= $%d", argCount)
+		args = append(args, f.MinPrice)
+		argCount++
+	}
+	if f.MaxPrice > 0 {
+		query += fmt.Sprintf(" AND price_minor <= $%d", argCount)
+		args = append(args, f.MaxPrice)
+		argCount++
+	}
+	if f.InStock {
+		query += " AND id IN (SELECT product_id FROM inventory WHERE available > 0)"
 	}
 
-	query += " ORDER BY created_at DESC LIMIT " + fmt.Sprintf("%d", limit)
+	if !cursor.IsZero() {
+		query += fmt.Sprintf(" AND created_at < $%d", argCount)
+		args = append(args, cursor)
+	}
+	query += fmt.Sprintf(" ORDER BY created_at DESC LIMIT %d", limit)
 
 	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {

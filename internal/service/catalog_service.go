@@ -13,6 +13,8 @@ type CatalogService struct {
 	products   domain.ProductRepository
 	categories domain.CategoryRepository
 	inventory  domain.InventoryRepository
+	outbox     domain.OutboxRepository
+	audit      domain.AuditLog
 	cache      domain.Cache
 	ids        domain.IDGenerator
 	clock      domain.Clock
@@ -22,6 +24,8 @@ func NewCatalogService(
 	products domain.ProductRepository,
 	categories domain.CategoryRepository,
 	inventory domain.InventoryRepository,
+	outbox domain.OutboxRepository,
+	audit domain.AuditLog,
 	cache domain.Cache,
 	ids domain.IDGenerator,
 	clock domain.Clock,
@@ -30,6 +34,8 @@ func NewCatalogService(
 		products:   products,
 		categories: categories,
 		inventory:  inventory,
+		outbox:     outbox,
+		audit:      audit,
 		cache:      cache,
 		ids:        ids,
 		clock:      clock,
@@ -58,7 +64,6 @@ func (s *CatalogService) GetProduct(ctx context.Context, id domain.ID) (domain.P
 }
 
 func (s *CatalogService) ListCategories(ctx context.Context) ([]domain.Category, error) {
-	// Categories are highly cacheable and rarely change.
 	key := "categories:all"
 	data, err := s.cache.GetOrFetch(ctx, key, 300*time.Second, func() ([]byte, error) {
 		cats, err := s.categories.List(ctx)
@@ -78,8 +83,7 @@ func (s *CatalogService) ListCategories(ctx context.Context) ([]domain.Category,
 	return cats, nil
 }
 
-// CreateProduct is an admin action. Invalidates the list cache if needed.
-func (s *CatalogService) CreateProduct(ctx context.Context, sku, name, desc string, catID domain.ID, price domain.Money, taxClass domain.TaxClass) (domain.Product, error) {
+func (s *CatalogService) CreateProduct(ctx context.Context, sku, name, desc string, catID domain.ID, price domain.Money, taxClass domain.TaxClass, actorID domain.ID, ip string) (domain.Product, error) {
 	now := s.clock.Now()
 	p, err := domain.NewProduct(s.ids.NewID(), sku, name, desc, catID, price, taxClass, "", now)
 	if err != nil {
@@ -88,37 +92,69 @@ func (s *CatalogService) CreateProduct(ctx context.Context, sku, name, desc stri
 	if err := s.products.Create(ctx, p); err != nil {
 		return domain.Product{}, err
 	}
+
+	payload, _ := json.Marshal(p)
+	_ = s.outbox.Create(ctx, domain.OutboxEvent{
+		ID: s.ids.NewID(), AggregateType: "product", AggregateID: p.ID(),
+		EventType: "ProductUpserted", Payload: payload, CreatedAt: now,
+	})
+
+	_ = s.audit.Append(ctx, domain.AuditEntry{
+		Actor: actorID, Action: "product_created", EntityType: "product", EntityID: p.ID().String(), At: now,
+	})
+
 	return p, nil
 }
 
-// UpdateProduct handles optimistic concurrency and cache invalidation.
-func (s *CatalogService) UpdateProduct(ctx context.Context, id domain.ID, name, desc string, catID domain.ID, price domain.Money, taxClass domain.TaxClass, expectedVersion int) (domain.Product, error) {
-	// 1. Get current
+func (s *CatalogService) UpdateProduct(ctx context.Context, id domain.ID, name, desc string, catID domain.ID, price domain.Money, taxClass domain.TaxClass, expectedVersion int, actorID domain.ID, ip string) (domain.Product, error) {
 	p, err := s.products.GetByID(ctx, id)
 	if err != nil {
 		return domain.Product{}, err
 	}
 
-	// 2. Check version
 	if p.Version() != expectedVersion {
 		return domain.Product{}, domain.ErrConflict
 	}
 
-	// 3. Update domain entity
 	updated, err := p.UpdateDetails(name, desc, catID, price, taxClass, "", s.clock.Now())
 	if err != nil {
 		return domain.Product{}, err
 	}
 
-	// 4. Persist
 	if err := s.products.Update(ctx, updated); err != nil {
 		return domain.Product{}, err
 	}
 
-	// 5. Invalidate cache
-	_ = s.cache.Delete(ctx, "product:"+id.String())
+	payload, _ := json.Marshal(updated)
+	_ = s.outbox.Create(ctx, domain.OutboxEvent{
+		ID: s.ids.NewID(), AggregateType: "product", AggregateID: updated.ID(),
+		EventType: "ProductUpserted", Payload: payload, CreatedAt: s.clock.Now(),
+	})
 
+	_ = s.audit.Append(ctx, domain.AuditEntry{
+		Actor: actorID, Action: "product_updated", EntityType: "product", EntityID: updated.ID().String(), At: s.clock.Now(),
+	})
+
+	_ = s.cache.Delete(ctx, "product:"+id.String())
 	return updated, nil
+}
+
+func (s *CatalogService) DeleteProduct(ctx context.Context, id domain.ID, actorID domain.ID) error {
+	if err := s.products.Delete(ctx, id, s.clock.Now()); err != nil {
+		return err
+	}
+
+	_ = s.outbox.Create(ctx, domain.OutboxEvent{
+		ID: s.ids.NewID(), AggregateType: "product", AggregateID: id,
+		EventType: "ProductDeactivated", Payload: []byte(`{}`), CreatedAt: s.clock.Now(),
+	})
+
+	_ = s.audit.Append(ctx, domain.AuditEntry{
+		Actor: actorID, Action: "product_deleted", EntityType: "product", EntityID: id.String(), At: s.clock.Now(),
+	})
+
+	_ = s.cache.Delete(ctx, "product:"+id.String())
+	return nil
 }
 
 func (s *CatalogService) AdjustStock(ctx context.Context, productID domain.ID, delta int, reason domain.StockReason) error {
@@ -127,19 +163,20 @@ func (s *CatalogService) AdjustStock(ctx context.Context, productID domain.ID, d
 		return err
 	}
 
-	err = s.inventory.AdjustStock(ctx, m)
-	if err != nil {
+	if err := s.inventory.AdjustStock(ctx, m); err != nil {
 		return err
 	}
 
-	// Invalidate product cache because stock might have changed (if it were included)
 	_ = s.cache.Delete(ctx, "product:"+productID.String())
 	return nil
 }
 
-func (s *CatalogService) ListProducts(ctx context.Context, limit int, cursor string) ([]domain.Product, error) {
-	// Create a cache key that varies based on limit and cursor
-	key := fmt.Sprintf("products:list:%d:%s", limit, cursor)
+func (s *CatalogService) ListLowStock(ctx context.Context) ([]domain.Inventory, error) {
+	return s.inventory.ListLowStock(ctx)
+}
+
+func (s *CatalogService) ListProducts(ctx context.Context, filters domain.ListFilters, limit int, cursor string) ([]domain.Product, error) {
+	key := fmt.Sprintf("products:list:%s:%s:%d:%d:%t:%d:%s", filters.CategoryID, filters.Query, filters.MinPrice, filters.MaxPrice, filters.InStock, limit, cursor)
 
 	data, err := s.cache.GetOrFetch(ctx, key, 60*time.Second, func() ([]byte, error) {
 		var cursorTime time.Time
@@ -150,11 +187,11 @@ func (s *CatalogService) ListProducts(ctx context.Context, limit int, cursor str
 			}
 			cursorTime = t
 		}
-		ps, err := s.products.List(ctx, limit, cursorTime)
+		ps, err := s.products.List(ctx, filters, limit, cursorTime)
 		if err != nil {
 			return nil, err
 		}
-		return json.Marshal(ps) // Product has MarshalJSON, so this works perfectly
+		return json.Marshal(ps)
 	})
 	if err != nil {
 		return nil, err

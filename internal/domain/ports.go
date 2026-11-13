@@ -29,22 +29,14 @@ type TokenSigner interface {
 	Sign(userID ID, role Role, ttl time.Duration) (string, error)
 }
 
-// UserRepository: Find* return ErrNotFound; Create returns ErrConflict on a
-// duplicate email.
 type UserRepository interface {
 	Create(ctx context.Context, u User) error
 	FindByEmail(ctx context.Context, email string) (User, error)
 	FindByID(ctx context.Context, id ID) (User, error)
-	// UpdateProfile writes only the non-nil fields.
 	UpdateProfile(ctx context.Context, id ID, name, phone *string, at time.Time) error
 	UpdatePasswordHash(ctx context.Context, id ID, hash string, at time.Time) error
 }
 
-// RefreshTokenRepository: Rotate must, in one transaction, run
-// "UPDATE refresh_tokens SET revoked_at = ..., replaced_by = ...
-// WHERE id = $parent AND revoked_at IS NULL" and insert the child. If that
-// UPDATE affects no rows (a concurrent rotation) it returns ErrConflict.
-// RevokeByUser returns ErrNotFound if the token is not the user's.
 type RefreshTokenRepository interface {
 	Create(ctx context.Context, t RefreshToken) error
 	FindByHash(ctx context.Context, hash []byte) (RefreshToken, error)
@@ -59,7 +51,6 @@ type AddressRepository interface {
 	Create(ctx context.Context, a Address) error
 }
 
-// AuditEntry.IP is persisted as NULL when it is the zero netip.Addr.
 type AuditEntry struct {
 	Actor      ID
 	Action     string
@@ -75,38 +66,55 @@ type AuditLog interface {
 	Append(ctx context.Context, e AuditEntry) error
 }
 
-// LockoutStore applies escalating backoff to failed logins, keyed on
-// (userID, ipPrefix) so one network cannot lock the owner out of others.
-// ipPrefix is a /24 (IPv4) or /64 (IPv6).
 type LockoutStore interface {
-	// Backoff returns how long the caller must still wait; zero means none.
 	Backoff(ctx context.Context, userID ID, ipPrefix string) (time.Duration, error)
-	// RecordFailedAttempt returns the backoff that applies from now.
 	RecordFailedAttempt(ctx context.Context, userID ID, ipPrefix string) (time.Duration, error)
 	Reset(ctx context.Context, userID ID, ipPrefix string) error
 }
 
-// ProductRepository persists Products.
+// --- Catalog Interfaces ---
+
+type ListFilters struct {
+	CategoryID string
+	Query      string
+	MinPrice   int64
+	MaxPrice   int64
+	InStock    bool
+}
+
 type ProductRepository interface {
 	Create(ctx context.Context, p Product) error
 	GetByID(ctx context.Context, id ID) (Product, error)
 	Update(ctx context.Context, p Product) error
-	List(ctx context.Context, limit int, cursor time.Time) ([]Product, error)
+	Delete(ctx context.Context, id ID, at time.Time) error
+	List(ctx context.Context, filters ListFilters, limit int, cursor time.Time) ([]Product, error)
 }
 
-// CategoryRepository persists Categories.
 type CategoryRepository interface {
 	Create(ctx context.Context, c Category) error
 	List(ctx context.Context) ([]Category, error)
 }
 
-// InventoryRepository adjusts stock and records ledger entries.
 type InventoryRepository interface {
 	AdjustStock(ctx context.Context, m StockMovement) error
+	Create(ctx context.Context, inv Inventory) error
+	ListLowStock(ctx context.Context) ([]Inventory, error)
 }
 
-// Cache is a generic byte cache (implemented by internal/adapter/redis).
 type Cache interface {
 	GetOrFetch(ctx context.Context, key string, ttl time.Duration, fetchFn func() ([]byte, error)) ([]byte, error)
 	Delete(ctx context.Context, keys ...string) error
+}
+
+type OutboxEvent struct {
+	ID            ID
+	AggregateType string
+	AggregateID   ID
+	EventType     string
+	Payload       []byte
+	CreatedAt     time.Time
+}
+
+type OutboxRepository interface {
+	Create(ctx context.Context, e OutboxEvent) error
 }

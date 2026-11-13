@@ -137,6 +137,7 @@ func run() error {
 	productRepo := postgres.NewProductRepo(pool)
 	categoryRepo := postgres.NewCategoryRepo(pool)
 	inventoryRepo := postgres.NewInventoryRepo(pool)
+	outboxRepo := postgres.NewOutboxRepo(pool)
 	auditLog := postgres.NewAuditLog(pool)
 
 	hasher := hashingadapter.NewHasher(hashing.DefaultParams())
@@ -149,7 +150,7 @@ func run() error {
 
 	// Catalog Service
 	catalogSvc := service.NewCatalogService(
-		productRepo, categoryRepo, inventoryRepo, cache, gen, clk,
+		productRepo, categoryRepo, inventoryRepo, outboxRepo, auditLog, cache, gen, clk,
 	)
 	svc, err := service.NewAuthService(
 		userRepo, refreshRepo, addressRepo, auditLog, lockout,

@@ -444,3 +444,10 @@ func (l *AuditLog) Append(ctx context.Context, e domain.AuditEntry) error {
 	}
 	return nil
 }
+
+func toNullUUID(id domain.ID) interface{} {
+	if id.IsZero() {
+		return nil
+	}
+	return toUUID(id)
+}

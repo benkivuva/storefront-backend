@@ -211,7 +211,8 @@ func newTestServer(t *testing.T, opts serverOpts) *testServer {
 	}
 
 	authH := handlers.NewAuthHandler(svc, trusted, 7*24*time.Hour, opts.SecureCookies)
-	catalogSvc := service.NewCatalogService(productRepo, categoryRepo, inventoryRepo, cache, gen, clock.New())
+	outboxRepo := postgres.NewOutboxRepo(sharedPool)
+	catalogSvc := service.NewCatalogService(productRepo, categoryRepo, inventoryRepo, outboxRepo, auditLog, cache, gen, clock.New())
 	catalogH := handlers.NewCatalogHandler(catalogSvc)
 	meH := handlers.NewMeHandler(svc)
 

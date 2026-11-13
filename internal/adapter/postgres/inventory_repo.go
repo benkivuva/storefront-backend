@@ -3,7 +3,9 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/benkivuva/storefront-backend/internal/domain"
@@ -17,8 +19,20 @@ func NewInventoryRepo(pool *pgxpool.Pool) *InventoryRepo {
 	return &InventoryRepo{pool: pool}
 }
 
-// AdjustStock inserts the ledger entry and updates the available count
-// in a single transaction.
+func (r *InventoryRepo) Create(ctx context.Context, inv domain.Inventory) error {
+	_, err := r.pool.Exec(ctx, `
+INSERT INTO inventory (product_id, available, low_stock_threshold, updated_at)
+VALUES ($1, $2, $3, $4)`,
+		toUUID(inv.ProductID()), inv.Available(), inv.Threshold(), inv.UpdatedAt())
+	if err != nil {
+		if isUniqueViolation(err) {
+			return domain.ErrConflict
+		}
+		return fmt.Errorf("inventory create: %w", err)
+	}
+	return nil
+}
+
 func (r *InventoryRepo) AdjustStock(ctx context.Context, m domain.StockMovement) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -49,23 +63,24 @@ WHERE product_id = $1`,
 	return tx.Commit(ctx)
 }
 
-func toNullUUID(id domain.ID) interface{} {
-	if id.IsZero() {
-		return nil
-	}
-	return toUUID(id)
-}
-
-func (r *InventoryRepo) Create(ctx context.Context, inv domain.Inventory) error {
-	_, err := r.pool.Exec(ctx, `
-INSERT INTO inventory (product_id, available, low_stock_threshold, updated_at)
-VALUES ($1, $2, $3, $4)`,
-		toUUID(inv.ProductID()), inv.Available(), inv.Threshold(), inv.UpdatedAt())
+func (r *InventoryRepo) ListLowStock(ctx context.Context) ([]domain.Inventory, error) {
+	rows, err := r.pool.Query(ctx, `
+SELECT product_id, available, low_stock_threshold, updated_at
+FROM inventory WHERE available <= low_stock_threshold`)
 	if err != nil {
-		if isUniqueViolation(err) {
-			return domain.ErrConflict
-		}
-		return fmt.Errorf("inventory create: %w", err)
+		return nil, fmt.Errorf("inventory low stock: %w", err)
 	}
-	return nil
+	defer rows.Close()
+
+	var out []domain.Inventory
+	for rows.Next() {
+		var pid pgtype.UUID
+		var avail, thresh int
+		var updatedAt time.Time
+		if err := rows.Scan(&pid, &avail, &thresh, &updatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, domain.RehydrateInventory(fromUUID(pid), avail, thresh, updatedAt))
+	}
+	return out, rows.Err()
 }
