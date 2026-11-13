@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -57,6 +58,43 @@ func (c Category) ID() ID       { return c.id }
 func (c Category) ParentID() ID { return c.parentID }
 func (c Category) Slug() string { return c.slug }
 func (c Category) Name() string { return c.name }
+
+type categoryJSON struct {
+	ID       string `json:"id"`
+	ParentID string `json:"parent_id,omitempty"`
+	Slug     string `json:"slug"`
+	Name     string `json:"name"`
+}
+
+func (c Category) MarshalJSON() ([]byte, error) {
+	var parent string
+	if !c.parentID.IsZero() {
+		parent = c.parentID.String()
+	}
+	return json.Marshal(categoryJSON{
+		ID: c.id.String(), ParentID: parent, Slug: c.slug, Name: c.name,
+	})
+}
+
+func (c *Category) UnmarshalJSON(data []byte) error {
+	var raw categoryJSON
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	id, err := ParseID(raw.ID)
+	if err != nil {
+		return err
+	}
+	var parentID ID
+	if raw.ParentID != "" {
+		parentID, err = ParseID(raw.ParentID)
+		if err != nil {
+			return err
+		}
+	}
+	*c, err = NewCategory(id, parentID, raw.Slug, raw.Name)
+	return err
+}
 
 type Product struct {
 	id            ID
@@ -148,7 +186,7 @@ func (p Product) UpdateDetails(name, description string, categoryID ID, price Mo
 	p.taxClass = taxClass
 	p.etimsItemCode = etimsCode
 	p.updatedAt = at
-	p.version++ // Increment version for optimistic concurrency (If-Match)
+	p.version++
 	return p, nil
 }
 
@@ -158,6 +196,62 @@ func (p Product) SoftDelete(at time.Time) Product {
 	p.updatedAt = at
 	p.version++
 	return p
+}
+
+// JSON Marshaling
+type productJSON struct {
+	ID            string    `json:"id"`
+	SKU           string    `json:"sku"`
+	Name          string    `json:"name"`
+	Description   string    `json:"description,omitempty"`
+	CategoryID    string    `json:"category_id,omitempty"`
+	Price         Money     `json:"price"`
+	TaxClass      string    `json:"tax_class"`
+	EtimsItemCode string    `json:"etims_item_code,omitempty"`
+	IsActive      bool      `json:"is_active"`
+	Version       int       `json:"version"`
+	DeletedAt     time.Time `json:"deleted_at,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+func (p Product) MarshalJSON() ([]byte, error) {
+	var catID string
+	if !p.categoryID.IsZero() {
+		catID = p.categoryID.String()
+	}
+	return json.Marshal(productJSON{
+		ID: p.id.String(), SKU: p.sku, Name: p.name, Description: p.description,
+		CategoryID: catID, Price: p.price, TaxClass: string(p.taxClass),
+		EtimsItemCode: p.etimsItemCode, IsActive: p.isActive, Version: p.version,
+		DeletedAt: p.deletedAt, CreatedAt: p.createdAt, UpdatedAt: p.updatedAt,
+	})
+}
+
+func (p *Product) UnmarshalJSON(data []byte) error {
+	var raw productJSON
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	id, err := ParseID(raw.ID)
+	if err != nil {
+		return err
+	}
+	var catID ID
+	if raw.CategoryID != "" {
+		catID, err = ParseID(raw.CategoryID)
+		if err != nil {
+			return err
+		}
+	}
+	rec := ProductRecord{
+		ID: id, SKU: raw.SKU, Name: raw.Name, Description: raw.Description,
+		CategoryID: catID, Price: raw.Price, TaxClass: TaxClass(raw.TaxClass),
+		EtimsItemCode: raw.EtimsItemCode, IsActive: raw.IsActive, Version: raw.Version,
+		DeletedAt: raw.DeletedAt, CreatedAt: raw.CreatedAt, UpdatedAt: raw.UpdatedAt,
+	}
+	*p, err = RehydrateProduct(rec)
+	return err
 }
 
 func (p Product) ID() ID                { return p.id }

@@ -85,3 +85,28 @@ type LockoutStore interface {
 	RecordFailedAttempt(ctx context.Context, userID ID, ipPrefix string) (time.Duration, error)
 	Reset(ctx context.Context, userID ID, ipPrefix string) error
 }
+
+// ProductRepository persists Products.
+type ProductRepository interface {
+	Create(ctx context.Context, p Product) error
+	GetByID(ctx context.Context, id ID) (Product, error)
+	Update(ctx context.Context, p Product) error
+	List(ctx context.Context, limit int, cursor time.Time) ([]Product, error)
+}
+
+// CategoryRepository persists Categories.
+type CategoryRepository interface {
+	Create(ctx context.Context, c Category) error
+	List(ctx context.Context) ([]Category, error)
+}
+
+// InventoryRepository adjusts stock and records ledger entries.
+type InventoryRepository interface {
+	AdjustStock(ctx context.Context, m StockMovement) error
+}
+
+// Cache is a generic byte cache (implemented by internal/adapter/redis).
+type Cache interface {
+	GetOrFetch(ctx context.Context, key string, ttl time.Duration, fetchFn func() ([]byte, error)) ([]byte, error)
+	Delete(ctx context.Context, keys ...string) error
+}
