@@ -178,6 +178,10 @@ func newTestServer(t *testing.T, opts serverOpts) *testServer {
 	}
 
 	userRepo := postgres.NewUserRepo(sharedPool)
+	productRepo := postgres.NewProductRepo(sharedPool)
+	categoryRepo := postgres.NewCategoryRepo(sharedPool)
+	inventoryRepo := postgres.NewInventoryRepo(sharedPool)
+	cache := adapterredis.NewCache(sharedRedis, "test")
 	refreshRepo := postgres.NewRefreshTokenRepo(sharedPool)
 	addressRepo := postgres.NewAddressRepo(sharedPool)
 	auditLog := postgres.NewAuditLog(sharedPool)
@@ -207,10 +211,13 @@ func newTestServer(t *testing.T, opts serverOpts) *testServer {
 	}
 
 	authH := handlers.NewAuthHandler(svc, trusted, 7*24*time.Hour, opts.SecureCookies)
+	catalogSvc := service.NewCatalogService(productRepo, categoryRepo, inventoryRepo, cache, gen, clock.New())
+	catalogH := handlers.NewCatalogHandler(catalogSvc)
 	meH := handlers.NewMeHandler(svc)
 
 	router := httpsrv.NewPublicRouter(httpsrv.RouterConfig{
 		AuthHandler:    authH,
+		CatalogHandler: catalogH,
 		MeHandler:      meH,
 		JWTVerifier:    middleware.NewJWTVerifier(sharedKS),
 		AuthLimiter:    opts.AuthLimiter,

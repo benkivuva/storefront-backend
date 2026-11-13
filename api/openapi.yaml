@@ -20,80 +20,68 @@ components:
     Problem:
       type: object
       properties:
-        type:
-          type: string
-          example: "about:blank"
-        title:
-          type: string
-          example: "invalid credentials"
-        status:
-          type: integer
-          example: 401
-        code:
-          type: string
-          example: "INVALID_CREDENTIALS"
+        type: { type: string, example: "about:blank" }
+        title: { type: string, example: "invalid credentials" }
+        status: { type: integer, example: 401 }
+        code: { type: string, example: "INVALID_CREDENTIALS" }
       required: [type, title, status, code]
 
     User:
       type: object
       properties:
-        id:
-          type: string
-          format: uuid
-          example: "01a1b6cb-1ad0-73ed-8806-844c124b44a6"
-        email:
-          type: string
-          format: email
-          example: "user@example.com"
-        name:
-          type: string
-          example: "Alice"
-        role:
-          type: string
-          enum: [customer, admin]
-          example: "customer"
-        phone:
-          type: string
-          example: "+254712345678"
-        is_email_verified:
-          type: boolean
-          example: false
-        created_at:
-          type: string
-          format: date-time
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        name: { type: string }
+        role: { type: string, enum: [customer, admin] }
+        phone: { type: string }
+        is_email_verified: { type: boolean }
+        created_at: { type: string, format: date-time }
       required: [id, email, role, is_email_verified, created_at]
+
+    Product:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        sku: { type: string }
+        name: { type: string }
+        description: { type: string }
+        category_id: { type: string, format: uuid }
+        price_minor: { type: integer }
+        currency: { type: string, example: KES }
+        tax_class: { type: string, enum: [STANDARD_16, ZERO_RATED, EXEMPT] }
+        version: { type: integer }
+        created_at: { type: string, format: date-time }
+      required: [id, sku, name, price_minor, currency, tax_class, version, created_at]
+
+    ProductsResponse:
+      type: object
+      properties:
+        products:
+          type: array
+          items:
+            $ref: '#/components/schemas/Product'
+      required: [products]
 
     RegisterRequest:
       type: object
       properties:
-        email:
-          type: string
-          format: email
-        password:
-          type: string
-          minLength: 8
-        name:
-          type: string
+        email: { type: string, format: email }
+        password: { type: string, minLength: 8 }
+        name: { type: string }
       required: [email, password]
 
     LoginRequest:
       type: object
       properties:
-        email:
-          type: string
-          format: email
-        password:
-          type: string
+        email: { type: string, format: email }
+        password: { type: string }
       required: [email, password]
 
     LoginResponse:
       type: object
       properties:
-        access_token:
-          type: string
-          example: "eyJhbGciOiJFZERTQSIs..."
-        user:
-          $ref: '#/components/schemas/User'
+        access_token: { type: string }
+        user: { $ref: '#/components/schemas/User' }
       required: [access_token, user]
 
 paths:
@@ -104,30 +92,20 @@ paths:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/RegisterRequest'
+            schema: { $ref: '#/components/schemas/RegisterRequest' }
       responses:
         '201':
-          description: User created successfully
+          description: User created
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  user:
-                    $ref: '#/components/schemas/User'
+                  user: { $ref: '#/components/schemas/User' }
         '400':
-          description: Invalid input (e.g., weak password, bad email)
-          content:
-            application/problem+json:
-              schema:
-                $ref: '#/components/schemas/Problem'
+          description: Invalid input
         '409':
-          description: Email already registered
-          content:
-            application/problem+json:
-              schema:
-                $ref: '#/components/schemas/Problem'
+          description: Email taken
 
   /api/v1/auth/login:
     post:
@@ -136,26 +114,15 @@ paths:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/LoginRequest'
+            schema: { $ref: '#/components/schemas/LoginRequest' }
       responses:
         '200':
           description: Login successful
-          headers:
-            Set-Cookie:
-              schema:
-                type: string
-                example: "refresh_token=...; HttpOnly; Secure; SameSite=Strict; Path=/api/v1/auth"
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/LoginResponse'
+              schema: { $ref: '#/components/schemas/LoginResponse' }
         '401':
           description: Invalid credentials
-          content:
-            application/problem+json:
-              schema:
-                $ref: '#/components/schemas/Problem'
 
   /api/v1/me:
     get:
@@ -170,14 +137,9 @@ paths:
               schema:
                 type: object
                 properties:
-                  user:
-                    $ref: '#/components/schemas/User'
+                  user: { $ref: '#/components/schemas/User' }
         '401':
           description: Unauthorized
-          content:
-            application/problem+json:
-              schema:
-                $ref: '#/components/schemas/Problem'
 
   /api/v1/products:
     get:
@@ -185,22 +147,16 @@ paths:
       parameters:
         - in: query
           name: limit
-          schema:
-            type: integer
-            maximum: 100
-            default: 20
+          schema: { type: integer, maximum: 100, default: 20 }
         - in: query
           name: cursor
-          schema:
-            type: string
-            format: date-time
+          schema: { type: string, format: date-time }
       responses:
         '200':
           description: Products retrieved
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/ProductsResponse'
+              schema: { $ref: '#/components/schemas/ProductsResponse' }
 
   /api/v1/products/{id}:
     get:
@@ -209,75 +165,12 @@ paths:
         - in: path
           name: id
           required: true
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
       responses:
         '200':
           description: Product retrieved
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/Product'
+              schema: { $ref: '#/components/schemas/Product' }
         '404':
           description: Product not found
-
-  /api/v1/admin/products:
-    post:
-      summary: Create product (admin only)
-      security:
-        - BearerAuth: []
-      requestBody:
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                sku: {type: string}
-                name: {type: string}
-                description: {type: string}
-                category_id: {type: string, format: uuid}
-                price_minor: {type: integer}
-                tax_class: {type: string, enum: [STANDARD_16, ZERO_RATED, EXEMPT]}
-      responses:
-        '201':
-          description: Created
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Product'
-
-  /api/v1/admin/products/{id}:
-    put:
-      summary: Update product (admin only)
-      security:
-        - BearerAuth: []
-      parameters:
-        - in: path
-          name: id
-          required: true
-          schema: {type: string, format: uuid}
-        - in: header
-          name: If-Match
-          required: true
-          schema: {type: integer}
-      requestBody:
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                name: {type: string}
-                description: {type: string}
-                category_id: {type: string, format: uuid}
-                price_minor: {type: integer}
-                tax_class: {type: string, enum: [STANDARD_16, ZERO_RATED, EXEMPT]}
-      responses:
-        '200':
-          description: Updated
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Product'
-        '409':
-          description: Version conflict

@@ -50,13 +50,11 @@ func (s *CatalogService) GetProduct(ctx context.Context, id domain.ID) (domain.P
 		return domain.Product{}, err
 	}
 
-	// We need a way to unmarshal. Since domain.Product has unexported fields,
-	// we can't json.Unmarshal directly into it. We must unmarshal into a record.
-	var rec domain.ProductRecord
-	if err := json.Unmarshal(data, &rec); err != nil {
+	var p domain.Product
+	if err := json.Unmarshal(data, &p); err != nil {
 		return domain.Product{}, fmt.Errorf("catalog: unmarshal product: %w", err)
 	}
-	return domain.RehydrateProduct(rec)
+	return p, nil
 }
 
 func (s *CatalogService) ListCategories(ctx context.Context) ([]domain.Category, error) {
