@@ -134,6 +134,9 @@ func run() error {
 	userRepo := postgres.NewUserRepo(pool)
 	refreshRepo := postgres.NewRefreshTokenRepo(pool)
 	addressRepo := postgres.NewAddressRepo(pool)
+	productRepo := postgres.NewProductRepo(pool)
+	categoryRepo := postgres.NewCategoryRepo(pool)
+	inventoryRepo := postgres.NewInventoryRepo(pool)
 	auditLog := postgres.NewAuditLog(pool)
 
 	hasher := hashingadapter.NewHasher(hashing.DefaultParams())
@@ -141,6 +144,13 @@ func run() error {
 	clk := clock.New()
 	gen := idgen.New()
 
+	// Cache (using the redis-cache client, not the streams client)
+	cache := adapterredis.NewCache(cacheClient, "storefront")
+
+	// Catalog Service
+	catalogSvc := service.NewCatalogService(
+		productRepo, categoryRepo, inventoryRepo, cache, gen, clk,
+	)
 	svc, err := service.NewAuthService(
 		userRepo, refreshRepo, addressRepo, auditLog, lockout,
 		hasher, signer, clk, gen, gen,
@@ -152,11 +162,13 @@ func run() error {
 
 	authHandler := handlers.NewAuthHandler(svc, trustedProxies, cfg.JWTRefreshTTL, cfg.CookieSecure())
 	meHandler := handlers.NewMeHandler(svc)
+	catalogHandler := handlers.NewCatalogHandler(catalogSvc)
 
 	ready := httpsrv.NewReady()
 	publicRouter := httpsrv.NewPublicRouter(httpsrv.RouterConfig{
 		AuthHandler:    authHandler,
 		MeHandler:      meHandler,
+		CatalogHandler: catalogHandler,
 		JWTVerifier:    middleware.NewJWTVerifier(ks),
 		AuthLimiter:    rateLimiterAdapter{inner: authRedisLimiter},
 		AuthFallback:   rateLimiterAdapter{inner: authMemLimiter},

@@ -65,3 +65,19 @@ func FromCategory(c domain.Category) Category {
 type CategoriesResponse struct {
 	Categories []Category `json:"categories"`
 }
+
+func FromProducts(ps []domain.Product) []Product {
+	out := make([]Product, len(ps))
+	for i, p := range ps {
+		out[i] = FromProduct(p)
+	}
+	return out
+}
+
+func FromCategories(cs []domain.Category) []Category {
+	out := make([]Category, len(cs))
+	for i, c := range cs {
+		out[i] = FromCategory(c)
+	}
+	return out
+}

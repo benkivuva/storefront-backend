@@ -138,3 +138,15 @@ func (s *CatalogService) AdjustStock(ctx context.Context, productID domain.ID, d
 	_ = s.cache.Delete(ctx, "product:"+productID.String())
 	return nil
 }
+
+func (s *CatalogService) ListProducts(ctx context.Context, limit int, cursor string) ([]domain.Product, error) {
+	var cursorTime time.Time
+	if cursor != "" {
+		t, err := time.Parse(time.RFC3339, cursor)
+		if err != nil {
+			return nil, fmt.Errorf("invalid cursor: %w", err)
+		}
+		cursorTime = t
+	}
+	return s.products.List(ctx, limit, cursorTime)
+}

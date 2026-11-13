@@ -178,3 +178,106 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/Problem'
+
+  /api/v1/products:
+    get:
+      summary: List products
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            maximum: 100
+            default: 20
+        - in: query
+          name: cursor
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: Products retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductsResponse'
+
+  /api/v1/products/{id}:
+    get:
+      summary: Get product by ID
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Product retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Product'
+        '404':
+          description: Product not found
+
+  /api/v1/admin/products:
+    post:
+      summary: Create product (admin only)
+      security:
+        - BearerAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                sku: {type: string}
+                name: {type: string}
+                description: {type: string}
+                category_id: {type: string, format: uuid}
+                price_minor: {type: integer}
+                tax_class: {type: string, enum: [STANDARD_16, ZERO_RATED, EXEMPT]}
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Product'
+
+  /api/v1/admin/products/{id}:
+    put:
+      summary: Update product (admin only)
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: {type: string, format: uuid}
+        - in: header
+          name: If-Match
+          required: true
+          schema: {type: integer}
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: {type: string}
+                description: {type: string}
+                category_id: {type: string, format: uuid}
+                price_minor: {type: integer}
+                tax_class: {type: string, enum: [STANDARD_16, ZERO_RATED, EXEMPT]}
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Product'
+        '409':
+          description: Version conflict

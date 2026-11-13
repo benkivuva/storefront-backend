@@ -10,6 +10,7 @@ import (
 	"github.com/benkivuva/storefront-backend/internal/adapter/http/dto"
 	"github.com/benkivuva/storefront-backend/internal/adapter/http/handlers"
 	"github.com/benkivuva/storefront-backend/internal/adapter/http/middleware"
+	"github.com/benkivuva/storefront-backend/internal/domain"
 )
 
 const (
@@ -19,6 +20,7 @@ const (
 
 type RouterConfig struct {
 	AuthHandler    *handlers.AuthHandler
+	CatalogHandler *handlers.CatalogHandler
 	MeHandler      *handlers.MeHandler
 	JWTVerifier    middleware.TokenVerifier
 	AuthLimiter    middleware.RateLimiter
@@ -56,6 +58,22 @@ func NewPublicRouter(cfg RouterConfig) chi.Router {
 			r.Post("/refresh", cfg.AuthHandler.Refresh)
 			r.Post("/logout", cfg.AuthHandler.Logout)
 		})
+	})
+
+	r.Route("/api/v1/products", func(r chi.Router) {
+		r.Get("/", cfg.CatalogHandler.ListProducts)
+		r.Get("/{id}", cfg.CatalogHandler.GetProduct)
+	})
+	r.Route("/api/v1/categories", func(r chi.Router) {
+		r.Get("/", cfg.CatalogHandler.ListCategories)
+	})
+
+	r.Route("/api/v1/admin/products", func(r chi.Router) {
+		r.Use(middleware.Auth(cfg.JWTVerifier))
+		r.Use(middleware.RequireRole(domain.RoleAdmin))
+		r.Post("/", cfg.CatalogHandler.CreateProduct)
+		r.Put("/{id}", cfg.CatalogHandler.UpdateProduct)
+		r.Post("/{id}/inventory", cfg.CatalogHandler.AdjustStock)
 	})
 
 	r.Route("/api/v1/me", func(r chi.Router) {
