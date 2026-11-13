@@ -89,7 +89,7 @@ func TestHTTP_Catalog_Extended(t *testing.T) {
 	}
 
 	// Search by MinPrice (min_price=20000) - should NOT find the 15000 product
-	resp, body = publicD.do("GET", "/api/v1/products?min_price=20000", "", "", "", uniqueXFF(t))
+	_, body = publicD.do("GET", "/api/v1/products?min_price=20000", "", "", "", uniqueXFF(t))
 	_ = json.Unmarshal(body, &searchRes)
 	found := false
 	for _, p := range searchRes.Products {

@@ -44,6 +44,7 @@ func TestMigrations_RoundTrip(t *testing.T) {
 		"categories",
 		"email_verification_tokens",
 		"inventory",
+		"outbox_events",
 		"password_reset_tokens",
 		"products",
 		"refresh_tokens",
