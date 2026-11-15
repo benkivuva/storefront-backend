@@ -118,3 +118,9 @@ type OutboxEvent struct {
 type OutboxRepository interface {
 	Create(ctx context.Context, e OutboxEvent) error
 }
+
+type CartRepository interface {
+	GetActiveByUser(ctx context.Context, userID ID) (Cart, error)
+	Create(ctx context.Context, c Cart) error
+	Update(ctx context.Context, c Cart) error
+}
