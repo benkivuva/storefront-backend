@@ -143,3 +143,7 @@ type IdempotencyRepository interface {
 	Save(ctx context.Context, userID ID, key string, status int, body []byte) error
 	Delete(ctx context.Context, userID ID, key string) error
 }
+
+type CheckoutRepository interface {
+	Execute(ctx context.Context, cartID ID, o *Order, idempotencyKey string) error
+}
