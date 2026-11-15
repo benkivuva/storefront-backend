@@ -130,3 +130,13 @@ type OrderRepository interface {
 	GetByID(ctx context.Context, id ID) (*Order, error)
 	UpdateStatus(ctx context.Context, o *Order) error
 }
+
+type IdempotencyRecord struct {
+	Status int
+	Body   []byte
+}
+
+type IdempotencyRepository interface {
+	Get(ctx context.Context, userID ID, key string) (IdempotencyRecord, error)
+	Save(ctx context.Context, userID ID, key string, requestHash []byte, status int, body []byte) error
+}
