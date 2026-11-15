@@ -22,6 +22,7 @@ type RouterConfig struct {
 	AuthHandler    *handlers.AuthHandler
 	MeHandler      *handlers.MeHandler
 	CatalogHandler *handlers.CatalogHandler
+	CartHandler    *handlers.CartHandler
 	JWTVerifier    middleware.TokenVerifier
 	AuthLimiter    middleware.RateLimiter
 	AuthFallback   middleware.RateLimiter
@@ -78,6 +79,22 @@ func NewPublicRouter(cfg RouterConfig) chi.Router {
 		r.Delete("/sessions/{id}", cfg.MeHandler.RevokeSession)
 	})
 
+	r.Route("/api/v1/cart", func(r chi.Router) {
+		r.Use(middleware.Auth(cfg.JWTVerifier))
+		r.Use(middleware.RequireRole())
+		r.Use(middleware.RateLimit(middleware.RateLimitConfig{
+			Limiter:  cfg.GlobalLimiter,
+			Fallback: cfg.GlobalFallback,
+			Prefix:   "rl:cart",
+			Capacity: cfg.GlobalCapacity,
+			Key:      middleware.AccountIPKey(cfg.TrustedProxies),
+		}))
+		r.Get("/", cfg.CartHandler.GetCart)
+		r.Post("/items", cfg.CartHandler.AddItem)
+		r.Patch("/items/{id}", cfg.CartHandler.UpdateQuantity)
+		r.Delete("/items/{id}", cfg.CartHandler.RemoveItem)
+	})
+
 	r.Route("/api/v1/products", func(r chi.Router) {
 		r.Use(middleware.RateLimit(middleware.RateLimitConfig{
 			Limiter:  cfg.GlobalLimiter,
@@ -125,7 +142,6 @@ func NewInternalRouter(ready *Ready) chi.Router {
 	r.Method(http.MethodGet, "/healthz", HealthHandler())
 	r.Method(http.MethodGet, "/readyz", ready.Handler())
 	r.Method(http.MethodGet, "/metrics", promhttp.Handler())
-
 	r.Get("/api/v1/openapi.yaml", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, "api/openapi.yaml")
 	})

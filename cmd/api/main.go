@@ -164,12 +164,16 @@ func run() error {
 	authHandler := handlers.NewAuthHandler(svc, trustedProxies, cfg.JWTRefreshTTL, cfg.CookieSecure())
 	meHandler := handlers.NewMeHandler(svc)
 	catalogHandler := handlers.NewCatalogHandler(catalogSvc)
+	cartRepo := postgres.NewCartRepo(pool, gen)
+	cartSvc := service.NewCartService(cartRepo, productRepo, gen, clk)
+	cartHandler := handlers.NewCartHandler(cartSvc)
 
 	ready := httpsrv.NewReady()
 	publicRouter := httpsrv.NewPublicRouter(httpsrv.RouterConfig{
 		AuthHandler:    authHandler,
 		MeHandler:      meHandler,
 		CatalogHandler: catalogHandler,
+		CartHandler:    cartHandler,
 		JWTVerifier:    middleware.NewJWTVerifier(ks),
 		AuthLimiter:    rateLimiterAdapter{inner: authRedisLimiter},
 		AuthFallback:   rateLimiterAdapter{inner: authMemLimiter},

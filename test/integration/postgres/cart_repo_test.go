@@ -25,7 +25,7 @@ func TestCartRepo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ctr.Terminate(ctx)
+	defer func() { _ = ctr.Terminate(ctx) }()
 
 	url, _ := ctr.ConnectionString(ctx, "sslmode=disable")
 	if err := migrate.Up(ctx, url); err != nil {
@@ -37,7 +37,6 @@ func TestCartRepo(t *testing.T) {
 
 	repo := postgres.NewCartRepo(pool, idgen.New())
 
-	// Setup dependencies
 	userID := idgen.New().NewID()
 	prodID := idgen.New().NewID()
 
@@ -50,23 +49,20 @@ func TestCartRepo(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Test 1: Not found
 	_, err = repo.GetActiveByUser(ctx, userID)
 	if !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 
-	// Test 2: Create
 	now := time.Now().UTC()
 	cartID := idgen.New().NewID()
 	c, _ := domain.NewCart(cartID, userID, now)
-	c.AddItem(prodID, 2)
+	_ = c.AddItem(prodID, 2)
 
 	if err := repo.Create(ctx, c); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
-	// Test 3: Get Active
 	fetched, err := repo.GetActiveByUser(ctx, userID)
 	if err != nil {
 		t.Fatalf("GetActive: %v", err)
@@ -75,8 +71,7 @@ func TestCartRepo(t *testing.T) {
 		t.Fatalf("mismatch on fetch: %+v", fetched)
 	}
 
-	// Test 4: Update (Add item)
-	c.UpdateQuantity(prodID, 5)
+	_ = c.UpdateQuantity(prodID, 5)
 	if err := repo.Update(ctx, c); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
