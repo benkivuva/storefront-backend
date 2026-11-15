@@ -19,20 +19,22 @@ const (
 )
 
 type RouterConfig struct {
-	AuthHandler    *handlers.AuthHandler
-	MeHandler      *handlers.MeHandler
-	CatalogHandler *handlers.CatalogHandler
-	CartHandler    *handlers.CartHandler
-	JWTVerifier    middleware.TokenVerifier
-	AuthLimiter    middleware.RateLimiter
-	AuthFallback   middleware.RateLimiter
-	GlobalLimiter  middleware.RateLimiter
-	GlobalFallback middleware.RateLimiter
-	TrustedProxies []netip.Prefix
-	AllowedOrigins []string
-	AuthCapacity   int
-	GlobalCapacity int
-	Prod           bool
+	AuthHandler     *handlers.AuthHandler
+	MeHandler       *handlers.MeHandler
+	CatalogHandler  *handlers.CatalogHandler
+	CheckoutHandler *handlers.CheckoutHandler
+	CartHandler     *handlers.CartHandler
+	JWTVerifier     middleware.TokenVerifier
+	IdempotencyRepo domain.IdempotencyRepository
+	AuthLimiter     middleware.RateLimiter
+	AuthFallback    middleware.RateLimiter
+	GlobalLimiter   middleware.RateLimiter
+	GlobalFallback  middleware.RateLimiter
+	TrustedProxies  []netip.Prefix
+	AllowedOrigins  []string
+	AuthCapacity    int
+	GlobalCapacity  int
+	Prod            bool
 }
 
 func NewPublicRouter(cfg RouterConfig) chi.Router {
@@ -77,6 +79,13 @@ func NewPublicRouter(cfg RouterConfig) chi.Router {
 		r.Post("/addresses", cfg.MeHandler.CreateAddress)
 		r.Get("/sessions", cfg.MeHandler.ListSessions)
 		r.Delete("/sessions/{id}", cfg.MeHandler.RevokeSession)
+	})
+
+	r.Route("/api/v1/checkout", func(r chi.Router) {
+		r.Use(middleware.Auth(cfg.JWTVerifier))
+		r.Use(middleware.RequireRole())
+		r.Use(middleware.Idempotency(cfg.IdempotencyRepo))
+		r.Post("/", cfg.CheckoutHandler.Checkout)
 	})
 
 	r.Route("/api/v1/cart", func(r chi.Router) {

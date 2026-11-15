@@ -165,25 +165,32 @@ func run() error {
 	meHandler := handlers.NewMeHandler(svc)
 	catalogHandler := handlers.NewCatalogHandler(catalogSvc)
 	cartRepo := postgres.NewCartRepo(pool, gen)
+	orderRepo := postgres.NewOrderRepo(pool, gen)
+	checkoutRepo := postgres.NewCheckoutRepo(pool, gen)
+	idemRepo := postgres.NewIdempotencyRepo(pool)
 	cartSvc := service.NewCartService(cartRepo, productRepo, gen, clk)
 	cartHandler := handlers.NewCartHandler(cartSvc)
+	checkoutSvc := service.NewCheckoutService(cartRepo, productRepo, checkoutRepo, gen, clk)
+	checkoutHandler := handlers.NewCheckoutHandler(checkoutSvc)
 
 	ready := httpsrv.NewReady()
 	publicRouter := httpsrv.NewPublicRouter(httpsrv.RouterConfig{
-		AuthHandler:    authHandler,
-		MeHandler:      meHandler,
-		CatalogHandler: catalogHandler,
-		CartHandler:    cartHandler,
-		JWTVerifier:    middleware.NewJWTVerifier(ks),
-		AuthLimiter:    rateLimiterAdapter{inner: authRedisLimiter},
-		AuthFallback:   rateLimiterAdapter{inner: authMemLimiter},
-		GlobalLimiter:  rateLimiterAdapter{inner: globalRedisLimiter},
-		GlobalFallback: rateLimiterAdapter{inner: globalMemLimiter},
-		TrustedProxies: trustedProxies,
-		AllowedOrigins: origins,
-		AuthCapacity:   cfg.RateLimitAuthCapacity,
-		GlobalCapacity: cfg.RateLimitGlobalCapacity,
-		Prod:           cfg.IsProduction(),
+		AuthHandler:     authHandler,
+		MeHandler:       meHandler,
+		CatalogHandler:  catalogHandler,
+		CartHandler:     cartHandler,
+		CheckoutHandler: checkoutHandler,
+		IdempotencyRepo: idemRepo,
+		JWTVerifier:     middleware.NewJWTVerifier(ks),
+		AuthLimiter:     rateLimiterAdapter{inner: authRedisLimiter},
+		AuthFallback:    rateLimiterAdapter{inner: authMemLimiter},
+		GlobalLimiter:   rateLimiterAdapter{inner: globalRedisLimiter},
+		GlobalFallback:  rateLimiterAdapter{inner: globalMemLimiter},
+		TrustedProxies:  trustedProxies,
+		AllowedOrigins:  origins,
+		AuthCapacity:    cfg.RateLimitAuthCapacity,
+		GlobalCapacity:  cfg.RateLimitGlobalCapacity,
+		Prod:            cfg.IsProduction(),
 	})
 	internalRouter := httpsrv.NewInternalRouter(ready)
 
