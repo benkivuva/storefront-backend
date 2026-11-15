@@ -3,7 +3,6 @@ package domain
 import (
 	"errors"
 	"fmt"
-	"slices"
 	"time"
 )
 
@@ -12,6 +11,7 @@ var (
 	ErrInvalidTransition = errors.New("domain: illegal order status transition")
 	ErrEmptyActor        = errors.New("domain: order transition requires an actor")
 	ErrZeroTime          = errors.New("domain: order transition requires a timestamp")
+	ErrEmptyOrderItems   = errors.New("domain: order must have at least one item")
 )
 
 type Status string
@@ -36,8 +36,6 @@ func (s Status) IsValid() bool {
 	return false
 }
 
-// CanTransitionTo reports whether an order may move from s to next.
-// CANCELLED and REFUNDED are terminal.
 func (s Status) CanTransitionTo(next Status) bool {
 	switch s {
 	case StatusPendingPayment:
@@ -56,7 +54,6 @@ func (s Status) CanTransitionTo(next Status) bool {
 	return false
 }
 
-// StatusChange is one entry in an order's audit trail.
 type StatusChange struct {
 	From, To Status
 	Actor    string
@@ -64,24 +61,66 @@ type StatusChange struct {
 	At       time.Time
 }
 
-// Order is the order aggregate. Status changes only through Transition.
+type OrderItemSnapshot struct {
+	ProductID      ID
+	SKU            string
+	ProductName    string
+	Quantity       int
+	UnitPrice      Money
+	TaxClass       TaxClass
+	TaxRateBp      int
+	LineVat        Money
+	LineGrossMinor int64
+}
+
 type Order struct {
-	id      ID
-	userID  ID
-	status  Status
-	history []StatusChange
+	id               ID
+	userID           ID
+	addressID        ID
+	items            []OrderItemSnapshot
+	deliveryFee      Money
+	subtotalMinor    int64
+	totalMinor       int64
+	status           Status
+	history          []StatusChange
+	paymentExpiresAt time.Time
+	createdAt        time.Time
+	updatedAt        time.Time
 }
 
-// RehydrateOrder rebuilds an Order from stored state.
-func RehydrateOrder(id, userID ID, status Status, history []StatusChange) (*Order, error) {
-	if !status.IsValid() {
-		return nil, fmt.Errorf("%w: %q", ErrInvalidStatus, status)
+func NewOrder(
+	id, userID, addressID ID,
+	items []OrderItemSnapshot,
+	deliveryFee Money,
+	at time.Time,
+	expireAt time.Time,
+) (*Order, error) {
+	if len(items) == 0 {
+		return nil, ErrEmptyOrderItems
 	}
-	return &Order{id: id, userID: userID, status: status, history: slices.Clone(history)}, nil
+
+	var subtotal int64
+	for _, item := range items {
+		subtotal += item.LineGrossMinor
+	}
+	total := subtotal + deliveryFee.AmountMinor()
+
+	return &Order{
+		id:               id,
+		userID:           userID,
+		addressID:        addressID,
+		items:            append([]OrderItemSnapshot(nil), items...),
+		deliveryFee:      deliveryFee,
+		subtotalMinor:    subtotal,
+		totalMinor:       total,
+		status:           StatusPendingPayment,
+		history:          []StatusChange{},
+		paymentExpiresAt: expireAt,
+		createdAt:        at,
+		updatedAt:        at,
+	}, nil
 }
 
-// Transition moves the order to next and records it. On error the order is
-// unchanged. The caller supplies at so tests and services control the clock.
 func (o *Order) Transition(next Status, actor, reason string, at time.Time) error {
 	if actor == "" {
 		return ErrEmptyActor
@@ -94,12 +133,29 @@ func (o *Order) Transition(next Status, actor, reason string, at time.Time) erro
 	}
 	o.history = append(o.history, StatusChange{From: o.status, To: next, Actor: actor, Reason: reason, At: at})
 	o.status = next
+	o.updatedAt = at
 	return nil
 }
 
-func (o *Order) ID() ID         { return o.id }
-func (o *Order) UserID() ID     { return o.userID }
-func (o *Order) Status() Status { return o.status }
+func (o *Order) ID() ID                      { return o.id }
+func (o *Order) UserID() ID                  { return o.userID }
+func (o *Order) AddressID() ID               { return o.addressID }
+func (o *Order) Status() Status              { return o.status }
+func (o *Order) SubtotalMinor() int64        { return o.subtotalMinor }
+func (o *Order) TotalMinor() int64           { return o.totalMinor }
+func (o *Order) DeliveryFee() Money          { return o.deliveryFee }
+func (o *Order) PaymentExpiresAt() time.Time { return o.paymentExpiresAt }
+func (o *Order) CreatedAt() time.Time        { return o.createdAt }
+func (o *Order) UpdatedAt() time.Time        { return o.updatedAt }
 
-// History returns a copy of the audit trail, oldest first.
-func (o *Order) History() []StatusChange { return slices.Clone(o.history) }
+func (o *Order) Items() []OrderItemSnapshot {
+	out := make([]OrderItemSnapshot, len(o.items))
+	copy(out, o.items)
+	return out
+}
+
+func (o *Order) History() []StatusChange {
+	out := make([]StatusChange, len(o.history))
+	copy(out, o.history)
+	return out
+}
