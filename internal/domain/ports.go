@@ -134,9 +134,12 @@ type OrderRepository interface {
 type IdempotencyRecord struct {
 	Status int
 	Body   []byte
+	Hash   []byte
 }
 
 type IdempotencyRepository interface {
 	Get(ctx context.Context, userID ID, key string) (IdempotencyRecord, error)
-	Save(ctx context.Context, userID ID, key string, requestHash []byte, status int, body []byte) error
+	Lock(ctx context.Context, userID ID, key string, requestHash []byte) error
+	Save(ctx context.Context, userID ID, key string, status int, body []byte) error
+	Delete(ctx context.Context, userID ID, key string) error
 }

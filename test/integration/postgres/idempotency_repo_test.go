@@ -37,41 +37,54 @@ func TestIdempotencyRepo(t *testing.T) {
 	defer pool.Close()
 
 	repo := postgres.NewIdempotencyRepo(pool)
-
+	
 	userID := idgen.New().NewID()
 	key := "idem-key-123"
 	hash1 := []byte("hash1")
 	hash2 := []byte("hash2")
 	body := json.RawMessage(`{"order_id":"123"}`)
 
-	// 1. Missing key
 	_, err = repo.Get(ctx, userID, key)
 	if !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 
-	// 2. Save
-	if err := repo.Save(ctx, userID, key, hash1, 201, body); err != nil {
+	if err := repo.Lock(ctx, userID, key, hash1); err != nil {
+		t.Fatalf("Lock: %v", err)
+	}
+
+	if err := repo.Lock(ctx, userID, key, hash2); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("expected ErrConflict on second lock, got %v", err)
+	}
+
+	_, err = repo.Get(ctx, userID, key)
+	if !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("expected ErrConflict for in-progress request, got %v", err)
+	}
+
+	if err := repo.Save(ctx, userID, key, 201, body); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
-	// 3. Fetch and verify
 	res, err := repo.Get(ctx, userID, key)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-
+	
 	var resJSON, expectedJSON map[string]interface{}
 	_ = json.Unmarshal(res.Body, &resJSON)
 	_ = json.Unmarshal(body, &expectedJSON)
-
+	
 	if res.Status != 201 || !reflect.DeepEqual(resJSON, expectedJSON) {
 		t.Fatalf("mismatch: %+v", res)
 	}
 
-	// 4. Save same key, different hash
-	err = repo.Save(ctx, userID, key, hash2, 200, body)
-	if !errors.Is(err, domain.ErrConflict) {
-		t.Fatalf("expected ErrConflict for hash mismatch, got %v", err)
+	if err := repo.Delete(ctx, userID, key); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	_, err = repo.Get(ctx, userID, key)
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound after delete, got %v", err)
 	}
 }
