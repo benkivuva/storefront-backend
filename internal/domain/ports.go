@@ -124,3 +124,9 @@ type CartRepository interface {
 	Create(ctx context.Context, c Cart) error
 	Update(ctx context.Context, c Cart) error
 }
+
+type OrderRepository interface {
+	Create(ctx context.Context, o *Order, idempotencyKey string) error
+	GetByID(ctx context.Context, id ID) (*Order, error)
+	UpdateStatus(ctx context.Context, o *Order) error
+}

@@ -80,6 +80,7 @@ type Order struct {
 	items            []OrderItemSnapshot
 	deliveryFee      Money
 	subtotalMinor    int64
+	taxMinor         int64
 	totalMinor       int64
 	status           Status
 	history          []StatusChange
@@ -100,8 +101,10 @@ func NewOrder(
 	}
 
 	var subtotal int64
+	var taxTotal int64
 	for _, item := range items {
 		subtotal += item.LineGrossMinor
+		taxTotal += item.LineVat.AmountMinor()
 	}
 	total := subtotal + deliveryFee.AmountMinor()
 
@@ -112,6 +115,7 @@ func NewOrder(
 		items:            append([]OrderItemSnapshot(nil), items...),
 		deliveryFee:      deliveryFee,
 		subtotalMinor:    subtotal,
+		taxMinor:         taxTotal,
 		totalMinor:       total,
 		status:           StatusPendingPayment,
 		history:          []StatusChange{},
@@ -119,6 +123,32 @@ func NewOrder(
 		createdAt:        at,
 		updatedAt:        at,
 	}, nil
+}
+
+func RehydrateOrder(
+	id, userID, addressID ID,
+	items []OrderItemSnapshot,
+	deliveryFee Money,
+	subtotalMinor, taxMinor, totalMinor int64,
+	status Status,
+	history []StatusChange,
+	paymentExpiresAt, createdAt, updatedAt time.Time,
+) *Order {
+	return &Order{
+		id:               id,
+		userID:           userID,
+		addressID:        addressID,
+		items:            append([]OrderItemSnapshot(nil), items...),
+		deliveryFee:      deliveryFee,
+		subtotalMinor:    subtotalMinor,
+		taxMinor:         taxMinor,
+		totalMinor:       totalMinor,
+		status:           status,
+		history:          append([]StatusChange(nil), history...),
+		paymentExpiresAt: paymentExpiresAt,
+		createdAt:        createdAt,
+		updatedAt:        updatedAt,
+	}
 }
 
 func (o *Order) Transition(next Status, actor, reason string, at time.Time) error {
@@ -142,6 +172,7 @@ func (o *Order) UserID() ID                  { return o.userID }
 func (o *Order) AddressID() ID               { return o.addressID }
 func (o *Order) Status() Status              { return o.status }
 func (o *Order) SubtotalMinor() int64        { return o.subtotalMinor }
+func (o *Order) TaxMinor() int64             { return o.taxMinor }
 func (o *Order) TotalMinor() int64           { return o.totalMinor }
 func (o *Order) DeliveryFee() Money          { return o.deliveryFee }
 func (o *Order) PaymentExpiresAt() time.Time { return o.paymentExpiresAt }
