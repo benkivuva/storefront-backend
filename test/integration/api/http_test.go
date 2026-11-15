@@ -210,26 +210,40 @@ func newTestServer(t *testing.T, opts serverOpts) *testServer {
 		netip.MustParsePrefix("::1/128"),
 	}
 
-	authH := handlers.NewAuthHandler(svc, trusted, 7*24*time.Hour, opts.SecureCookies)
+	authH := handlers.NewAuthHandler(svc, trusted, time.Hour, false)
+	meH := handlers.NewMeHandler(svc)
+
 	outboxRepo := postgres.NewOutboxRepo(sharedPool)
 	catalogSvc := service.NewCatalogService(productRepo, categoryRepo, inventoryRepo, outboxRepo, auditLog, cache, gen, clock.New())
 	catalogH := handlers.NewCatalogHandler(catalogSvc)
-	meH := handlers.NewMeHandler(svc)
+
+	cartRepo := postgres.NewCartRepo(sharedPool, gen)
+	cartSvc := service.NewCartService(cartRepo, productRepo, gen, clock.New())
+	cartH := handlers.NewCartHandler(cartSvc)
+
+	checkoutRepo := postgres.NewCheckoutRepo(sharedPool, gen)
+	checkoutSvc := service.NewCheckoutService(cartRepo, productRepo, checkoutRepo, gen, clock.New())
+	checkoutH := handlers.NewCheckoutHandler(checkoutSvc)
+
+	idemRepo := postgres.NewIdempotencyRepo(sharedPool)
 
 	router := httpsrv.NewPublicRouter(httpsrv.RouterConfig{
-		AuthHandler:    authH,
-		CatalogHandler: catalogH,
-		MeHandler:      meH,
-		JWTVerifier:    middleware.NewJWTVerifier(sharedKS),
-		AuthLimiter:    opts.AuthLimiter,
-		AuthFallback:   opts.AuthFallback,
-		GlobalLimiter:  opts.GlobalLimiter,
-		GlobalFallback: opts.GlobalFallback,
-		TrustedProxies: trusted,
-		AllowedOrigins: []string{testOrigin},
-		AuthCapacity:   opts.AuthCapacity,
-		GlobalCapacity: opts.GlobalCapacity,
-		Prod:           false,
+		AuthHandler:     authH,
+		MeHandler:       meH,
+		CatalogHandler:  catalogH,
+		CartHandler:     cartH,
+		CheckoutHandler: checkoutH,
+		IdempotencyRepo: idemRepo,
+		JWTVerifier:     middleware.NewJWTVerifier(sharedKS),
+		AuthLimiter:     opts.AuthLimiter,
+		AuthFallback:    opts.AuthFallback,
+		GlobalLimiter:   opts.GlobalLimiter,
+		GlobalFallback:  opts.GlobalFallback,
+		TrustedProxies:  trusted,
+		AllowedOrigins:  []string{testOrigin},
+		AuthCapacity:    opts.AuthCapacity,
+		GlobalCapacity:  opts.GlobalCapacity,
+		Prod:            false,
 	})
 
 	srv := httptest.NewServer(router)
