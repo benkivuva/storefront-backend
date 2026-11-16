@@ -161,3 +161,18 @@ type ProcessedEventRepository interface {
 IsProcessed(ctx context.Context, consumer string, eventID ID) (bool, error)
 MarkProcessed(ctx context.Context, consumer string, eventID ID) error
 }
+
+type StreamMessage struct {
+ID    string
+Event OutboxEvent
+}
+
+type StreamReader interface {
+ReadGroup(ctx context.Context, group, consumer string, count int, block time.Duration) ([]StreamMessage, error)
+Ack(ctx context.Context, group string, msgID string) error
+MoveToDLQ(ctx context.Context, group string, msg StreamMessage, reason string) error
+}
+
+type EventHandler interface {
+Handle(ctx context.Context, event OutboxEvent) error
+}
