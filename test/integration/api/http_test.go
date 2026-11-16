@@ -222,7 +222,7 @@ func newTestServer(t *testing.T, opts serverOpts) *testServer {
 	cartH := handlers.NewCartHandler(cartSvc)
 
 	checkoutRepo := postgres.NewCheckoutRepo(sharedPool, gen)
-	checkoutSvc := service.NewCheckoutService(cartRepo, productRepo, checkoutRepo, gen, clock.New())
+	checkoutSvc := service.NewCheckoutService(cartRepo, productRepo, addressRepo, checkoutRepo, gen, clock.New())
 	checkoutH := handlers.NewCheckoutHandler(checkoutSvc)
 
 	idemRepo := postgres.NewIdempotencyRepo(sharedPool)

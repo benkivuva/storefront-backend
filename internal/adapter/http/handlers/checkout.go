@@ -10,7 +10,7 @@ import (
 )
 
 type CheckoutService interface {
-	Checkout(ctx context.Context, userID, addressID domain.ID, idempotencyKey string) (*domain.Order, error)
+	Checkout(ctx context.Context, userID, addressID domain.ID, expectedTotalMinor int64, idempotencyKey string) (*domain.Order, error)
 }
 
 type CheckoutHandler struct {
@@ -22,7 +22,8 @@ func NewCheckoutHandler(svc CheckoutService) *CheckoutHandler {
 }
 
 type checkoutRequest struct {
-	AddressID string `json:"address_id"`
+	AddressID          string `json:"address_id"`
+	ExpectedTotalMinor int64  `json:"expected_total_minor"`
 }
 
 func (h *CheckoutHandler) Checkout(w http.ResponseWriter, r *http.Request) {
@@ -50,7 +51,7 @@ func (h *CheckoutHandler) Checkout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	order, err := h.svc.Checkout(r.Context(), u.UserID, addrID, idemKey)
+	order, err := h.svc.Checkout(r.Context(), u.UserID, addrID, req.ExpectedTotalMinor, idemKey)
 	if err != nil {
 		dto.WriteError(w, err)
 		return

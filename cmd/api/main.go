@@ -165,12 +165,11 @@ func run() error {
 	meHandler := handlers.NewMeHandler(svc)
 	catalogHandler := handlers.NewCatalogHandler(catalogSvc)
 	cartRepo := postgres.NewCartRepo(pool, gen)
-	orderRepo := postgres.NewOrderRepo(pool, gen)
 	checkoutRepo := postgres.NewCheckoutRepo(pool, gen)
 	idemRepo := postgres.NewIdempotencyRepo(pool)
 	cartSvc := service.NewCartService(cartRepo, productRepo, gen, clk)
 	cartHandler := handlers.NewCartHandler(cartSvc)
-	checkoutSvc := service.NewCheckoutService(cartRepo, productRepo, checkoutRepo, gen, clk)
+	checkoutSvc := service.NewCheckoutService(cartRepo, productRepo, addressRepo, checkoutRepo, gen, clk)
 	checkoutHandler := handlers.NewCheckoutHandler(checkoutSvc)
 
 	ready := httpsrv.NewReady()

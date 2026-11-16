@@ -75,6 +75,7 @@ type OrderItemSnapshot struct {
 
 type Order struct {
 	id               ID
+	orderNumber      int64
 	userID           ID
 	addressID        ID
 	items            []OrderItemSnapshot
@@ -110,6 +111,7 @@ func NewOrder(
 
 	return &Order{
 		id:               id,
+		orderNumber:      0,
 		userID:           userID,
 		addressID:        addressID,
 		items:            append([]OrderItemSnapshot(nil), items...),
@@ -126,7 +128,7 @@ func NewOrder(
 }
 
 func RehydrateOrder(
-	id, userID, addressID ID,
+	id ID, orderNumber int64, userID, addressID ID,
 	items []OrderItemSnapshot,
 	deliveryFee Money,
 	subtotalMinor, taxMinor, totalMinor int64,
@@ -136,6 +138,7 @@ func RehydrateOrder(
 ) *Order {
 	return &Order{
 		id:               id,
+		orderNumber:      orderNumber,
 		userID:           userID,
 		addressID:        addressID,
 		items:            append([]OrderItemSnapshot(nil), items...),
@@ -150,6 +153,8 @@ func RehydrateOrder(
 		updatedAt:        updatedAt,
 	}
 }
+
+func (o *Order) SetOrderNumber(num int64) { o.orderNumber = num }
 
 func (o *Order) Transition(next Status, actor, reason string, at time.Time) error {
 	if actor == "" {
@@ -168,6 +173,7 @@ func (o *Order) Transition(next Status, actor, reason string, at time.Time) erro
 }
 
 func (o *Order) ID() ID                      { return o.id }
+func (o *Order) OrderNumber() int64          { return o.orderNumber }
 func (o *Order) UserID() ID                  { return o.userID }
 func (o *Order) AddressID() ID               { return o.addressID }
 func (o *Order) Status() Status              { return o.status }

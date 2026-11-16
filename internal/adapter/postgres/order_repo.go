@@ -83,17 +83,18 @@ VALUES ($1, $2, $3, $4, $5, $6)`,
 func (r *OrderRepo) GetByID(ctx context.Context, id domain.ID) (*domain.Order, error) {
 	var (
 		oid, userID, addrID                    pgtype.UUID
+		orderNumber                            int64
 		status, currency                       string
 		subtotal, deliveryFee, taxMinor, total int64
 		paymentExpiresAt, createdAt, updatedAt time.Time
 	)
 
 	err := r.pool.QueryRow(ctx, `
-SELECT id, user_id, shipping_address_id, status,
+SELECT id, order_number, user_id, shipping_address_id, status,
        subtotal_minor, delivery_fee_minor, tax_minor, total_minor,
        currency, payment_expires_at, created_at, updated_at
 FROM orders WHERE id = $1`, toUUID(id)).Scan(
-		&oid, &userID, &addrID, &status,
+		&oid, &orderNumber, &userID, &addrID, &status,
 		&subtotal, &deliveryFee, &taxMinor, &total,
 		&currency, &paymentExpiresAt, &createdAt, &updatedAt,
 	)
@@ -170,7 +171,7 @@ FROM order_status_history WHERE order_id = $1 ORDER BY id ASC`, toUUID(id))
 	}
 
 	return domain.RehydrateOrder(
-		fromUUID(oid), fromUUID(userID), fromUUID(addrID),
+		fromUUID(oid), orderNumber, fromUUID(userID), fromUUID(addrID),
 		items, fee, subtotal, taxMinor, total, domain.Status(status),
 		history, paymentExpiresAt, createdAt, updatedAt,
 	), nil
@@ -204,4 +205,32 @@ VALUES ($1, $2, $3, $4, $5, $6)`,
 	}
 
 	return tx.Commit(ctx)
+}
+
+func (r *OrderRepo) ListByUser(ctx context.Context, userID domain.ID) ([]*domain.Order, error) {
+	rows, err := r.pool.Query(ctx, `
+SELECT id FROM orders 
+WHERE user_id = $1 ORDER BY created_at DESC LIMIT 100`, toUUID(userID))
+	if err != nil {
+		return nil, fmt.Errorf("order list: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []domain.ID
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, fromUUID(id))
+	}
+
+	var out []*domain.Order
+	for _, id := range ids {
+		o, err := r.GetByID(ctx, id)
+		if err == nil {
+			out = append(out, o)
+		}
+	}
+	return out, nil
 }

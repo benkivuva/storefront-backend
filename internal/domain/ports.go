@@ -49,6 +49,7 @@ type RefreshTokenRepository interface {
 type AddressRepository interface {
 	ListByUser(ctx context.Context, userID ID) ([]Address, error)
 	Create(ctx context.Context, a Address) error
+	FindByID(ctx context.Context, id ID) (Address, error)
 }
 
 type AuditEntry struct {
@@ -71,8 +72,6 @@ type LockoutStore interface {
 	RecordFailedAttempt(ctx context.Context, userID ID, ipPrefix string) (time.Duration, error)
 	Reset(ctx context.Context, userID ID, ipPrefix string) error
 }
-
-// --- Catalog Interfaces ---
 
 type ListFilters struct {
 	CategoryID string
@@ -125,10 +124,15 @@ type CartRepository interface {
 	Update(ctx context.Context, c Cart) error
 }
 
+type CheckoutRepository interface {
+	Execute(ctx context.Context, cartID ID, o *Order, idempotencyKey string) error
+}
+
 type OrderRepository interface {
 	Create(ctx context.Context, o *Order, idempotencyKey string) error
 	GetByID(ctx context.Context, id ID) (*Order, error)
 	UpdateStatus(ctx context.Context, o *Order) error
+	ListByUser(ctx context.Context, userID ID) ([]*Order, error)
 }
 
 type IdempotencyRecord struct {
@@ -142,8 +146,4 @@ type IdempotencyRepository interface {
 	Lock(ctx context.Context, userID ID, key string, requestHash []byte) error
 	Save(ctx context.Context, userID ID, key string, status int, body []byte) error
 	Delete(ctx context.Context, userID ID, key string) error
-}
-
-type CheckoutRepository interface {
-	Execute(ctx context.Context, cartID ID, o *Order, idempotencyKey string) error
 }

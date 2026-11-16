@@ -37,7 +37,7 @@ func TestIdempotencyRepo(t *testing.T) {
 	defer pool.Close()
 
 	repo := postgres.NewIdempotencyRepo(pool)
-	
+
 	userID := idgen.New().NewID()
 	key := "idem-key-123"
 	hash1 := []byte("hash1")
@@ -70,11 +70,11 @@ func TestIdempotencyRepo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	
+
 	var resJSON, expectedJSON map[string]interface{}
 	_ = json.Unmarshal(res.Body, &resJSON)
 	_ = json.Unmarshal(body, &expectedJSON)
-	
+
 	if res.Status != 201 || !reflect.DeepEqual(resJSON, expectedJSON) {
 		t.Fatalf("mismatch: %+v", res)
 	}

@@ -42,6 +42,8 @@ var errorMappings = []struct {
 	{service.ErrEmailTaken, http.StatusConflict, "EMAIL_TAKEN", "email already registered"},
 	{service.ErrEmptyPatch, http.StatusBadRequest, "EMPTY_PATCH", "no fields to update"},
 	{service.ErrAddressLimit, http.StatusConflict, "ADDRESS_LIMIT", "address limit reached"},
+	{service.ErrEmptyCart, http.StatusBadRequest, "EMPTY_CART", "cart is empty"},
+	{service.ErrPriceChanged, http.StatusConflict, "PRICE_CHANGED", "prices have changed"},
 
 	// Domain errors safe to expose
 	{domain.ErrNotFound, http.StatusNotFound, "NOT_FOUND", "resource not found"},

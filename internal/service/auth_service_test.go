@@ -897,3 +897,14 @@ func TestIPPrefix_Invalid(t *testing.T) {
 		t.Errorf("got %q, want unknown", got)
 	}
 }
+
+func (r *fakeAddressRepo) FindByID(_ context.Context, id domain.ID) (domain.Address, error) {
+for _, a := range r.byUser {
+for _, addr := range a {
+if addr.ID() == id {
+return addr, nil
+}
+}
+}
+return domain.Address{}, domain.ErrNotFound
+}
