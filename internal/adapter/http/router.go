@@ -22,8 +22,9 @@ type RouterConfig struct {
 	AuthHandler     *handlers.AuthHandler
 	MeHandler       *handlers.MeHandler
 	CatalogHandler  *handlers.CatalogHandler
-	CheckoutHandler *handlers.CheckoutHandler
 	CartHandler     *handlers.CartHandler
+	CheckoutHandler *handlers.CheckoutHandler
+	OrderHandler    *handlers.OrderHandler
 	JWTVerifier     middleware.TokenVerifier
 	IdempotencyRepo domain.IdempotencyRepository
 	AuthLimiter     middleware.RateLimiter
@@ -81,13 +82,6 @@ func NewPublicRouter(cfg RouterConfig) chi.Router {
 		r.Delete("/sessions/{id}", cfg.MeHandler.RevokeSession)
 	})
 
-	r.Route("/api/v1/checkout", func(r chi.Router) {
-		r.Use(middleware.Auth(cfg.JWTVerifier))
-		r.Use(middleware.RequireRole())
-		r.Use(middleware.Idempotency(cfg.IdempotencyRepo))
-		r.Post("/", cfg.CheckoutHandler.Checkout)
-	})
-
 	r.Route("/api/v1/cart", func(r chi.Router) {
 		r.Use(middleware.Auth(cfg.JWTVerifier))
 		r.Use(middleware.RequireRole())
@@ -102,6 +96,27 @@ func NewPublicRouter(cfg RouterConfig) chi.Router {
 		r.Post("/items", cfg.CartHandler.AddItem)
 		r.Patch("/items/{id}", cfg.CartHandler.UpdateQuantity)
 		r.Delete("/items/{id}", cfg.CartHandler.RemoveItem)
+	})
+
+	r.Route("/api/v1/checkout", func(r chi.Router) {
+		r.Use(middleware.Auth(cfg.JWTVerifier))
+		r.Use(middleware.RequireRole())
+		r.Use(middleware.Idempotency(cfg.IdempotencyRepo))
+		r.Post("/", cfg.CheckoutHandler.Checkout)
+	})
+
+	r.Route("/api/v1/orders", func(r chi.Router) {
+		r.Use(middleware.Auth(cfg.JWTVerifier))
+		r.Use(middleware.RequireRole())
+		r.Use(middleware.RateLimit(middleware.RateLimitConfig{
+			Limiter:  cfg.GlobalLimiter,
+			Fallback: cfg.GlobalFallback,
+			Prefix:   "rl:orders",
+			Capacity: cfg.GlobalCapacity,
+			Key:      middleware.AccountIPKey(cfg.TrustedProxies),
+		}))
+		r.Get("/", cfg.OrderHandler.ListOrders)
+		r.Get("/{id}", cfg.OrderHandler.GetOrder)
 	})
 
 	r.Route("/api/v1/products", func(r chi.Router) {

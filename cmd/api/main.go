@@ -139,20 +139,20 @@ func run() error {
 	inventoryRepo := postgres.NewInventoryRepo(pool)
 	outboxRepo := postgres.NewOutboxRepo(pool)
 	auditLog := postgres.NewAuditLog(pool)
+	cartRepo := postgres.NewCartRepo(pool, idgen.New())
+	checkoutRepo := postgres.NewCheckoutRepo(pool, idgen.New())
+	idemRepo := postgres.NewIdempotencyRepo(pool)
+	orderRepo := postgres.NewOrderRepo(pool, idgen.New())
 
 	hasher := hashingadapter.NewHasher(hashing.DefaultParams())
 	signer := middleware.NewJWTSigner(ks)
 	clk := clock.New()
 	gen := idgen.New()
 
-	// Cache (using the redis-cache client, not the streams client)
 	cache := adapterredis.NewCache(cacheClient, "storefront")
 
-	// Catalog Service
-	catalogSvc := service.NewCatalogService(
-		productRepo, categoryRepo, inventoryRepo, outboxRepo, auditLog, cache, gen, clk,
-	)
-	svc, err := service.NewAuthService(
+	catalogSvc := service.NewCatalogService(productRepo, categoryRepo, inventoryRepo, outboxRepo, auditLog, cache, gen, clk)
+	authSvc, err := service.NewAuthService(
 		userRepo, refreshRepo, addressRepo, auditLog, lockout,
 		hasher, signer, clk, gen, gen,
 		service.Config{AccessTTL: cfg.JWTAccessTTL, RefreshTTL: cfg.JWTRefreshTTL},
@@ -161,16 +161,16 @@ func run() error {
 		return fmt.Errorf("auth service: %w", err)
 	}
 
-	authHandler := handlers.NewAuthHandler(svc, trustedProxies, cfg.JWTRefreshTTL, cfg.CookieSecure())
-	meHandler := handlers.NewMeHandler(svc)
-	catalogHandler := handlers.NewCatalogHandler(catalogSvc)
-	cartRepo := postgres.NewCartRepo(pool, gen)
-	checkoutRepo := postgres.NewCheckoutRepo(pool, gen)
-	idemRepo := postgres.NewIdempotencyRepo(pool)
 	cartSvc := service.NewCartService(cartRepo, productRepo, gen, clk)
-	cartHandler := handlers.NewCartHandler(cartSvc)
 	checkoutSvc := service.NewCheckoutService(cartRepo, productRepo, addressRepo, checkoutRepo, gen, clk)
+	orderSvc := service.NewOrderService(orderRepo)
+
+	authHandler := handlers.NewAuthHandler(authSvc, trustedProxies, cfg.JWTRefreshTTL, cfg.CookieSecure())
+	meHandler := handlers.NewMeHandler(authSvc)
+	catalogHandler := handlers.NewCatalogHandler(catalogSvc)
+	cartHandler := handlers.NewCartHandler(cartSvc)
 	checkoutHandler := handlers.NewCheckoutHandler(checkoutSvc)
+	orderHandler := handlers.NewOrderHandler(orderSvc)
 
 	ready := httpsrv.NewReady()
 	publicRouter := httpsrv.NewPublicRouter(httpsrv.RouterConfig{
@@ -179,8 +179,9 @@ func run() error {
 		CatalogHandler:  catalogHandler,
 		CartHandler:     cartHandler,
 		CheckoutHandler: checkoutHandler,
-		IdempotencyRepo: idemRepo,
+		OrderHandler:    orderHandler,
 		JWTVerifier:     middleware.NewJWTVerifier(ks),
+		IdempotencyRepo: idemRepo,
 		AuthLimiter:     rateLimiterAdapter{inner: authRedisLimiter},
 		AuthFallback:    rateLimiterAdapter{inner: authMemLimiter},
 		GlobalLimiter:   rateLimiterAdapter{inner: globalRedisLimiter},

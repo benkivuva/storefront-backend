@@ -186,7 +186,7 @@ func newTestServer(t *testing.T, opts serverOpts) *testServer {
 	addressRepo := postgres.NewAddressRepo(sharedPool)
 	auditLog := postgres.NewAuditLog(sharedPool)
 	lockout, err := adapterredis.NewLockoutStore(sharedRedis,
-		[]adapterredis.BackoffStep{{MinFailures: 3, Wait: 100 * time.Millisecond}},
+		[]adapterredis.BackoffStep{{MinFailures: 3, Wait: 5 * time.Second}},
 		24*time.Hour)
 	if err != nil {
 		t.Fatalf("lockout: %v", err)
@@ -210,7 +210,7 @@ func newTestServer(t *testing.T, opts serverOpts) *testServer {
 		netip.MustParsePrefix("::1/128"),
 	}
 
-	authH := handlers.NewAuthHandler(svc, trusted, time.Hour, false)
+	authH := handlers.NewAuthHandler(svc, trusted, time.Hour, opts.SecureCookies)
 	meH := handlers.NewMeHandler(svc)
 
 	outboxRepo := postgres.NewOutboxRepo(sharedPool)
@@ -1026,7 +1026,7 @@ func TestHTTP_Lockout_EndToEnd(t *testing.T) {
 	}
 
 	// Wait for the lockout to expire (200ms to avoid flakes).
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(5500 * time.Millisecond)
 
 	// Correct password now should succeed.
 	resp, respBody = d.do("POST", "/api/v1/auth/login", fmt.Sprintf(`{"email":%q,"password":%q}`, email, testPassword), "", "", xff)

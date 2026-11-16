@@ -61,7 +61,7 @@ func TestHTTP_Checkout_ConcurrentIdempotency(t *testing.T) {
 	custD := newDoer(t, s)
 	custD.do("POST", "/api/v1/auth/register", fmt.Sprintf(`{"email":%q,"password":%q,"name":"Cust"}`, custEmail, testPassword), "", "", custXFF)
 
-	resp, loginBody = custD.do("POST", "/api/v1/auth/login", fmt.Sprintf(`{"email":%q,"password":%q}`, custEmail, testPassword), "", "", custXFF)
+	_, loginBody = custD.do("POST", "/api/v1/auth/login", fmt.Sprintf(`{"email":%q,"password":%q}`, custEmail, testPassword), "", "", custXFF)
 	var custLogin struct {
 		AccessToken string `json:"access_token"`
 	}

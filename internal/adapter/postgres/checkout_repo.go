@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -20,6 +21,19 @@ func NewCheckoutRepo(pool *pgxpool.Pool, ids domain.IDGenerator) *CheckoutRepo {
 	return &CheckoutRepo{pool: pool, ids: ids}
 }
 
+type orderCreatedEvent struct {
+	ID               string    `json:"id"`
+	UserID           string    `json:"user_id"`
+	Status           string    `json:"status"`
+	SubtotalMinor    int64     `json:"subtotal_minor"`
+	DeliveryFeeMinor int64     `json:"delivery_fee_minor"`
+	TaxMinor         int64     `json:"tax_minor"`
+	TotalMinor       int64     `json:"total_minor"`
+	Currency         string    `json:"currency"`
+	ItemCount        int       `json:"item_count"`
+	CreatedAt        time.Time `json:"created_at"`
+}
+
 func (r *CheckoutRepo) Execute(ctx context.Context, cartID domain.ID, o *domain.Order, idempotencyKey string) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -27,13 +41,11 @@ func (r *CheckoutRepo) Execute(ctx context.Context, cartID domain.ID, o *domain.
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	// 1. Convert Cart
 	tag, err := tx.Exec(ctx, `UPDATE carts SET status = 'CONVERTED', updated_at = now() WHERE id = $1 AND status = 'ACTIVE'`, toUUID(cartID))
 	if err != nil || tag.RowsAffected() == 0 {
-		return domain.ErrConflict // Cart not active or missing
+		return domain.ErrConflict
 	}
 
-	// 2. Insert Order
 	_, err = tx.Exec(ctx, `
 INSERT INTO orders (
 id, user_id, shipping_address_id, status,
@@ -48,14 +60,12 @@ currency, payment_expires_at, idempotency_key, created_at, updated_at
 		return fmt.Errorf("order insert: %w", err)
 	}
 
-	// Sort items by ProductID to prevent deadlocks during concurrent checkouts
 	items := o.Items()
 	sort.Slice(items, func(i, j int) bool {
 		return items[i].ProductID.String() < items[j].ProductID.String()
 	})
 
 	for _, item := range items {
-		// 3. Insert Order Item
 		_, err = tx.Exec(ctx, `
 INSERT INTO order_items (
 id, order_id, product_id, sku, product_name, quantity,
@@ -69,16 +79,14 @@ unit_price_minor, tax_class, tax_rate_bp, line_gross_minor, line_vat_minor
 			return fmt.Errorf("order item insert: %w", err)
 		}
 
-		// 4. Reserve Stock
 		tag, err = tx.Exec(ctx, `
 UPDATE inventory SET available = available - $2, updated_at = $3
 WHERE product_id = $1 AND available >= $2`,
 			toUUID(item.ProductID), item.Quantity, o.CreatedAt())
 		if err != nil || tag.RowsAffected() == 0 {
-			return domain.ErrConflict // Out of stock
+			return domain.ErrConflict
 		}
 
-		// 5. Write Stock Movement
 		_, err = tx.Exec(ctx, `
 INSERT INTO stock_movements (id, product_id, delta, reason, order_id, created_at)
 VALUES ($1, $2, $3, 'ORDER_RESERVE', $4, $5)`,
@@ -88,14 +96,27 @@ VALUES ($1, $2, $3, 'ORDER_RESERVE', $4, $5)`,
 		}
 	}
 
-	// 6. Insert Order History
 	for _, h := range o.History() {
 		_, _ = tx.Exec(ctx, `INSERT INTO order_status_history (order_id, from_status, to_status, actor, reason, created_at) VALUES ($1, $2, $3, $4, $5, $6)`,
 			toUUID(o.ID()), string(h.From), string(h.To), h.Actor, h.Reason, h.At)
 	}
 
-	// 7. Insert Outbox Event
-	payload, _ := json.Marshal(o)
+	payload, err := json.Marshal(orderCreatedEvent{
+		ID:               o.ID().String(),
+		UserID:           o.UserID().String(),
+		Status:           string(o.Status()),
+		SubtotalMinor:    o.SubtotalMinor(),
+		DeliveryFeeMinor: o.DeliveryFee().AmountMinor(),
+		TaxMinor:         o.TaxMinor(),
+		TotalMinor:       o.TotalMinor(),
+		Currency:         string(o.DeliveryFee().Currency()),
+		ItemCount:        len(items),
+		CreatedAt:        o.CreatedAt(),
+	})
+	if err != nil {
+		return fmt.Errorf("marshal order event: %w", err)
+	}
+
 	_, err = tx.Exec(ctx, `
 INSERT INTO outbox_events (event_id, aggregate_type, aggregate_id, event_type, payload, created_at)
 VALUES ($1, 'order', $2, 'OrderCreated', $3, $4)`,
