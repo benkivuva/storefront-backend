@@ -156,3 +156,8 @@ Lock(ctx context.Context, userID ID, key string, requestHash []byte) error
 Save(ctx context.Context, userID ID, key string, status int, body []byte) error
 Delete(ctx context.Context, userID ID, key string) error
 }
+
+type ProcessedEventRepository interface {
+IsProcessed(ctx context.Context, consumer string, eventID ID) (bool, error)
+MarkProcessed(ctx context.Context, consumer string, eventID ID) error
+}
