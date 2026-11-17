@@ -177,3 +177,13 @@ type StreamReader interface {
 type EventHandler interface {
 	Handle(ctx context.Context, event OutboxEvent) error
 }
+
+type MailMessage struct {
+	To      string
+	Subject string
+	Body    string
+}
+
+type Mailer interface {
+	Send(ctx context.Context, msg MailMessage) error
+}
