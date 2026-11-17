@@ -86,3 +86,70 @@ func TestRedisStreamReader_Lifecycle(t *testing.T) {
 		t.Errorf("expected DLQ reason 'test failure', got %v", dlqMsgs[0].Values["reason"])
 	}
 }
+
+func TestRedisStreamReader_ReclaimStale(t *testing.T) {
+	c := setupRedis(t)
+	ctx := context.Background()
+
+	streamName := "events:reclaim-test"
+	group := "reclaim-group"
+	consumerA := "worker-A"
+	consumerB := "worker-B"
+	dlqName := "events:dlq"
+
+	reader := NewStreamReader(c, streamName, dlqName)
+
+	if err := c.XGroupCreateMkStream(ctx, streamName, group, "0").Err(); err != nil {
+		t.Fatalf("XGroupCreateMkStream: %v", err)
+	}
+
+	// Push message
+	_, err := c.XAdd(ctx, &goredis.XAddArgs{
+		Stream: streamName,
+		Values: map[string]interface{}{
+			"event_id":       "01020304-0506-0708-090a-0b0c0d0e0f10",
+			"event_type":     "OrderCreated",
+			"aggregate_type": "order",
+			"aggregate_id":   "01020304-0506-0708-090a-0b0c0d0e0f10",
+			"payload":        `{"order_id":"123"}`,
+			"created_at":     time.Now().Format(time.RFC3339),
+		},
+	}).Result()
+	if err != nil {
+		t.Fatalf("XAdd: %v", err)
+	}
+
+	// Worker A reads the message but crashes (doesn't ACK)
+	msgs, err := reader.ReadGroup(ctx, group, consumerA, 10, 100*time.Millisecond)
+	if err != nil || len(msgs) != 1 {
+		t.Fatalf("Worker A failed to read: %v", err)
+	}
+
+	// Reclaim with 0 idle time should find it immediately
+	reclaimed, err := reader.ReclaimStale(ctx, group, consumerB, 0)
+	if err != nil {
+		t.Fatalf("ReclaimStale: %v", err)
+	}
+	if len(reclaimed) != 1 {
+		t.Fatalf("expected 1 reclaimed message, got %d", len(reclaimed))
+	}
+	if reclaimed[0].ID != msgs[0].ID {
+		t.Errorf("reclaimed wrong message ID")
+	}
+
+	// Verify Worker B now owns the message in the PEL
+	pending, _ := c.XPendingExt(ctx, &goredis.XPendingExtArgs{
+		Stream: streamName,
+		Group:  group,
+		Start:  "-",
+		End:    "+",
+		Count:  10,
+	}).Result()
+
+	if len(pending) != 1 {
+		t.Fatalf("expected 1 pending message, got %d", len(pending))
+	}
+	if pending[0].Consumer != consumerB {
+		t.Errorf("expected consumer to be %s, got %s", consumerB, pending[0].Consumer)
+	}
+}

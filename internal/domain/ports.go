@@ -171,6 +171,7 @@ type StreamReader interface {
 	ReadGroup(ctx context.Context, group, consumer string, count int, block time.Duration) ([]StreamMessage, error)
 	Ack(ctx context.Context, group string, msgID string) error
 	MoveToDLQ(ctx context.Context, group string, msg StreamMessage, reason string) error
+	ReclaimStale(ctx context.Context, group, consumer string, minIdle time.Duration) ([]StreamMessage, error)
 }
 
 type EventHandler interface {

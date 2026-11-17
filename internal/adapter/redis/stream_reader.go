@@ -36,36 +36,36 @@ func (r *StreamReader) ReadGroup(ctx context.Context, group, consumer string, co
 	}).Result()
 
 	if err == goredis.Nil {
-		return nil, nil // Timeout, no messages
+		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("xreadgroup: %w", err)
 	}
 
-	var msgs []domain.StreamMessage
-	for _, stream := range streams {
-		for _, msg := range stream.Messages {
-			var e domain.OutboxEvent
-
-			idStr, _ := msg.Values["event_id"].(string)
-			e.ID = parseUUID(idStr)
-
-			e.EventType, _ = msg.Values["event_type"].(string)
-			e.AggregateType, _ = msg.Values["aggregate_type"].(string)
-
-			aggIDStr, _ := msg.Values["aggregate_id"].(string)
-			e.AggregateID = parseUUID(aggIDStr)
-
-			payloadStr, _ := msg.Values["payload"].(string)
-			e.Payload = []byte(payloadStr)
-
-			msgs = append(msgs, domain.StreamMessage{
-				ID:    msg.ID,
-				Event: e,
-			})
-		}
+	if len(streams) == 0 {
+		return nil, nil
 	}
-	return msgs, nil
+	return parseStreamMessages(streams[0].Messages), nil
+}
+
+func (r *StreamReader) ReclaimStale(ctx context.Context, group, consumer string, minIdle time.Duration) ([]domain.StreamMessage, error) {
+	msgs, _, err := r.client.XAutoClaim(ctx, &goredis.XAutoClaimArgs{
+		Stream:   r.streamName,
+		Group:    group,
+		Consumer: consumer,
+		MinIdle:  minIdle,
+		Start:    "0-0",
+		Count:    100,
+	}).Result()
+
+	if err == goredis.Nil {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("xautoclaim: %w", err)
+	}
+
+	return parseStreamMessages(msgs), nil
 }
 
 func (r *StreamReader) Ack(ctx context.Context, group string, msgID string) error {
@@ -94,6 +94,31 @@ func (r *StreamReader) MoveToDLQ(ctx context.Context, group string, msg domain.S
 	}
 
 	return r.Ack(ctx, group, msg.ID)
+}
+
+func parseStreamMessages(redisMsgs []goredis.XMessage) []domain.StreamMessage {
+	var msgs []domain.StreamMessage
+	for _, msg := range redisMsgs {
+		var e domain.OutboxEvent
+
+		idStr, _ := msg.Values["event_id"].(string)
+		e.ID = parseUUID(idStr)
+
+		e.EventType, _ = msg.Values["event_type"].(string)
+		e.AggregateType, _ = msg.Values["aggregate_type"].(string)
+
+		aggIDStr, _ := msg.Values["aggregate_id"].(string)
+		e.AggregateID = parseUUID(aggIDStr)
+
+		payloadStr, _ := msg.Values["payload"].(string)
+		e.Payload = []byte(payloadStr)
+
+		msgs = append(msgs, domain.StreamMessage{
+			ID:    msg.ID,
+			Event: e,
+		})
+	}
+	return msgs
 }
 
 func parseUUID(s string) domain.ID {
