@@ -31,6 +31,10 @@ func (m *mockStreamReader) MoveToDLQ(ctx context.Context, group string, msg doma
 	return nil
 }
 
+func (m *mockStreamReader) ReclaimStale(ctx context.Context, group, consumer string, minIdle time.Duration) ([]domain.StreamMessage, error) {
+	return nil, nil
+}
+
 type mockHandler struct {
 	handledEvents []domain.OutboxEvent
 	shouldFail    bool
@@ -90,7 +94,6 @@ func TestConsumer_ProcessNextBatch_AlreadyProcessed(t *testing.T) {
 		msgs: []domain.StreamMessage{{ID: "1-0", Event: evt}},
 	}
 	handler := &mockHandler{}
-	// Simulate that this event is already in the DB
 	repo := &mockProcessedRepo{processed: map[string]bool{id1.String(): true}}
 
 	c := service.NewConsumer("test-group", "worker-1", reader, repo, handler)
@@ -99,11 +102,9 @@ func TestConsumer_ProcessNextBatch_AlreadyProcessed(t *testing.T) {
 		t.Fatalf("ProcessNextBatch: %v", err)
 	}
 
-	// Should NOT call the handler
 	if len(handler.handledEvents) != 0 {
 		t.Errorf("expected 0 handled events, got %d", len(handler.handledEvents))
 	}
-	// Should STILL Ack the message so it doesn't get stuck in the queue
 	if len(reader.ackedIDs) != 1 {
 		t.Errorf("expected message to be acked even though skipped")
 	}
@@ -123,15 +124,12 @@ func TestConsumer_ProcessNextBatch_HandlerFails_MovesToDLQ(t *testing.T) {
 		t.Fatalf("ProcessNextBatch: %v", err)
 	}
 
-	// Handler failed, so should NOT be marked processed
 	if len(repo.marked) != 0 {
 		t.Errorf("expected 0 marked processed, got %d", len(repo.marked))
 	}
-	// Should be moved to DLQ
 	if len(reader.dlqMsgs) != 1 {
 		t.Errorf("expected 1 DLQ message, got %d", len(reader.dlqMsgs))
 	}
-	// Should STILL Ack the message so it is removed from the Pending Entries List (PEL)
 	if len(reader.ackedIDs) != 1 {
 		t.Errorf("expected message to be acked after DLQ")
 	}
