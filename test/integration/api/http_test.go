@@ -135,10 +135,11 @@ func runTests(m *testing.M) int {
 // ---------- per-test stack ----------
 
 type testServer struct {
-	URL  string
-	Srv  *httptest.Server
-	KS   *pkggjwt.KeySet
-	Pool *pgxpool.Pool
+	URL   string
+	Srv   *httptest.Server
+	KS    *pkggjwt.KeySet
+	Pool  *pgxpool.Pool
+	Redis *goredis.Client
 }
 
 type serverOpts struct {
@@ -248,7 +249,7 @@ func newTestServer(t *testing.T, opts serverOpts) *testServer {
 
 	srv := httptest.NewServer(router)
 	t.Cleanup(srv.Close)
-	return &testServer{URL: srv.URL, Srv: srv, KS: sharedKS, Pool: sharedPool}
+	return &testServer{URL: srv.URL, Srv: srv, KS: sharedKS, Pool: sharedPool, Redis: sharedRedis}
 }
 
 // bridgeLimiter adapts adapterredis.Limiter to middleware.RateLimiter.
