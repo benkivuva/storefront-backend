@@ -32,6 +32,10 @@ func (m *mockOutboxRepo) FetchPending(ctx context.Context, limit int) ([]domain.
 	return m.pendingEvents, nil
 }
 
+func (m *mockOutboxRepo) DeletePublishedBefore(ctx context.Context, cutoff time.Time) (int64, error) {
+	return 0, nil
+}
+
 func (m *mockOutboxRepo) FetchPublishedInRange(ctx context.Context, from, to time.Time, limit int) ([]domain.OutboxEvent, error) {
 	return nil, nil
 }

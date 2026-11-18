@@ -20,9 +20,9 @@ func NewOutboxRepo(pool *pgxpool.Pool) *OutboxRepo {
 
 func (r *OutboxRepo) Create(ctx context.Context, e domain.OutboxEvent) error {
 	_, err := r.pool.Exec(ctx, `
-INSERT INTO outbox_events (event_id, aggregate_type, aggregate_id, event_type, payload, created_at)
-VALUES ($1, $2, $3, $4, $5, $6)`,
-		toUUID(e.ID), e.AggregateType, toUUID(e.AggregateID), e.EventType, e.Payload, e.CreatedAt)
+INSERT INTO outbox_events (event_id, aggregate_type, aggregate_id, event_type, payload, trace_context, created_at)
+VALUES ($1, $2, $3, $4, $5, nullif($6, '')::jsonb, $7)`,
+		toUUID(e.ID), e.AggregateType, toUUID(e.AggregateID), e.EventType, e.Payload, e.TraceContext, e.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("outbox create: %w", err)
 	}
@@ -31,7 +31,7 @@ VALUES ($1, $2, $3, $4, $5, $6)`,
 
 func (r *OutboxRepo) FetchPending(ctx context.Context, limit int) ([]domain.OutboxEvent, error) {
 	rows, err := r.pool.Query(ctx, `
-SELECT event_id, aggregate_type, aggregate_id, event_type, payload, attempts, coalesce(last_error, ''), created_at
+SELECT event_id, aggregate_type, aggregate_id, event_type, payload, attempts, coalesce(last_error, ''), created_at, coalesce(trace_context::text, '')
 FROM outbox_events
 WHERE status = 'pending'
 ORDER BY id ASC
@@ -54,6 +54,7 @@ FOR UPDATE SKIP LOCKED`, limit)
 			&e.Attempts,
 			&e.LastError,
 			&e.CreatedAt,
+			&e.TraceContext,
 		); err != nil {
 			return nil, fmt.Errorf("scan outbox event: %w", err)
 		}
@@ -67,7 +68,7 @@ FOR UPDATE SKIP LOCKED`, limit)
 
 func (r *OutboxRepo) FetchPublishedInRange(ctx context.Context, from, to time.Time, limit int) ([]domain.OutboxEvent, error) {
 	rows, err := r.pool.Query(ctx, `
-SELECT event_id, aggregate_type, aggregate_id, event_type, payload, attempts, coalesce(last_error, ''), created_at
+SELECT event_id, aggregate_type, aggregate_id, event_type, payload, attempts, coalesce(last_error, ''), created_at, coalesce(trace_context::text, '')
 FROM outbox_events
 WHERE status = 'published' AND created_at >= $1 AND created_at <= $2
 ORDER BY id ASC
@@ -89,6 +90,7 @@ LIMIT $3`, from, to, limit)
 			&e.Attempts,
 			&e.LastError,
 			&e.CreatedAt,
+			&e.TraceContext,
 		); err != nil {
 			return nil, fmt.Errorf("scan outbox event: %w", err)
 		}

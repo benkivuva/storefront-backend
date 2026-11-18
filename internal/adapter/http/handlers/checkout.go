@@ -51,7 +51,13 @@ func (h *CheckoutHandler) Checkout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	order, err := h.svc.Checkout(r.Context(), u.UserID, addrID, req.ExpectedTotalMinor, idemKey)
+	// Inject traceparent into context
+	ctx := r.Context()
+	if tp := r.Header.Get("traceparent"); tp != "" {
+		ctx = context.WithValue(ctx, domain.TraceparentKey, tp)
+	}
+
+	order, err := h.svc.Checkout(ctx, u.UserID, addrID, req.ExpectedTotalMinor, idemKey)
 	if err != nil {
 		dto.WriteError(w, err)
 		return

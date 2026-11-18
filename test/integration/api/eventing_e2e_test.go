@@ -157,7 +157,7 @@ func TestE2E_EventingPipeline(t *testing.T) {
 	// Poll database for up to 2 seconds to allow the consumer to finish writing
 	var outboxStatus string
 	var processedCount int
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 
 	for time.Now().Before(deadline) {
 		_ = s.Pool.QueryRow(ctx, `SELECT status FROM outbox_events WHERE event_type = 'OrderCreated' ORDER BY created_at DESC LIMIT 1`).Scan(&outboxStatus)

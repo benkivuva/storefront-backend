@@ -2,6 +2,7 @@ package postgres_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -220,5 +221,38 @@ func TestOutboxRepo_DeletePublishedBefore(t *testing.T) {
 	_ = pool.QueryRow(ctx, `SELECT count(*) FROM outbox_events WHERE event_id = $1`, pendingEvt.ID.String()).Scan(&count)
 	if count != 1 {
 		t.Error("old pending event should NOT be deleted")
+	}
+}
+
+func TestOutboxRepo_TraceContext(t *testing.T) {
+	_, repo := setupOutboxDB(t)
+	ctx := context.Background()
+	gen := idgen.New()
+
+	evt := domain.OutboxEvent{
+		ID:            gen.NewID(),
+		AggregateType: "order",
+		AggregateID:   gen.NewID(),
+		EventType:     "OrderCreated",
+		Payload:       []byte(`{}`),
+		TraceContext:  `{"traceparent":"00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"}`,
+		CreatedAt:     time.Now(),
+	}
+
+	if err := repo.Create(ctx, evt); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// Fetch it back
+	events, err := repo.FetchPending(ctx, 10)
+	if err != nil {
+		t.Fatalf("FetchPending: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+
+	if !strings.Contains(events[0].TraceContext, "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01") {
+		t.Errorf("expected trace context %s, got %s", evt.TraceContext, events[0].TraceContext)
 	}
 }

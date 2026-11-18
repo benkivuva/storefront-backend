@@ -111,6 +111,7 @@ type OutboxEvent struct {
 	AggregateID   ID
 	EventType     string
 	Payload       []byte
+	TraceContext  string
 	Attempts      int
 	LastError     string
 	CreatedAt     time.Time

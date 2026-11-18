@@ -32,6 +32,7 @@ type orderCreatedEvent struct {
 	Currency         string    `json:"currency"`
 	ItemCount        int       `json:"item_count"`
 	CreatedAt        time.Time `json:"created_at"`
+	TraceContext     string    `json:"trace_context,omitempty"`
 }
 
 func (r *CheckoutRepo) Execute(ctx context.Context, cartID domain.ID, o *domain.Order, idempotencyKey string) error {
@@ -101,6 +102,12 @@ VALUES ($1, $2, $3, 'ORDER_RESERVE', $4, $5)`,
 			toUUID(o.ID()), string(h.From), string(h.To), h.Actor, h.Reason, h.At)
 	}
 
+	traceCtx := ""
+	if tp, ok := ctx.Value(domain.TraceparentKey).(string); ok && tp != "" {
+		b, _ := json.Marshal(map[string]string{"traceparent": tp})
+		traceCtx = string(b)
+	}
+
 	payload, err := json.Marshal(orderCreatedEvent{
 		ID:               o.ID().String(),
 		UserID:           o.UserID().String(),
@@ -112,15 +119,16 @@ VALUES ($1, $2, $3, 'ORDER_RESERVE', $4, $5)`,
 		Currency:         string(o.DeliveryFee().Currency()),
 		ItemCount:        len(items),
 		CreatedAt:        o.CreatedAt(),
+		TraceContext:     traceCtx,
 	})
 	if err != nil {
 		return fmt.Errorf("marshal order event: %w", err)
 	}
 
 	_, err = tx.Exec(ctx, `
-INSERT INTO outbox_events (event_id, aggregate_type, aggregate_id, event_type, payload, created_at)
-VALUES ($1, 'order', $2, 'OrderCreated', $3, $4)`,
-		toUUID(r.ids.NewID()), toUUID(o.ID()), payload, o.CreatedAt())
+INSERT INTO outbox_events (event_id, aggregate_type, aggregate_id, event_type, payload, trace_context, created_at)
+VALUES ($1, 'order', $2, 'OrderCreated', $3, nullif($4, '')::jsonb, $5)`,
+		toUUID(r.ids.NewID()), toUUID(o.ID()), payload, traceCtx, o.CreatedAt())
 	if err != nil {
 		return fmt.Errorf("outbox insert: %w", err)
 	}
