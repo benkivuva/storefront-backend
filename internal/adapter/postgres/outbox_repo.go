@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -38,6 +39,41 @@ LIMIT $1
 FOR UPDATE SKIP LOCKED`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("fetch pending outbox: %w", err)
+	}
+	defer rows.Close()
+
+	var events []domain.OutboxEvent
+	for rows.Next() {
+		var e domain.OutboxEvent
+		if err := rows.Scan(
+			(*[16]byte)(&e.ID),
+			&e.AggregateType,
+			(*[16]byte)(&e.AggregateID),
+			&e.EventType,
+			&e.Payload,
+			&e.Attempts,
+			&e.LastError,
+			&e.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan outbox event: %w", err)
+		}
+		events = append(events, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate outbox events: %w", err)
+	}
+	return events, nil
+}
+
+func (r *OutboxRepo) FetchPublishedInRange(ctx context.Context, from, to time.Time, limit int) ([]domain.OutboxEvent, error) {
+	rows, err := r.pool.Query(ctx, `
+SELECT event_id, aggregate_type, aggregate_id, event_type, payload, attempts, coalesce(last_error, ''), created_at
+FROM outbox_events
+WHERE status = 'published' AND created_at >= $1 AND created_at <= $2
+ORDER BY id ASC
+LIMIT $3`, from, to, limit)
+	if err != nil {
+		return nil, fmt.Errorf("fetch published outbox: %w", err)
 	}
 	defer rows.Close()
 

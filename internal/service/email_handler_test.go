@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/benkivuva/storefront-backend/internal/domain"
 	"github.com/benkivuva/storefront-backend/internal/service"
@@ -23,16 +24,38 @@ func (m *mockMailer) Send(ctx context.Context, msg domain.MailMessage) error {
 	return nil
 }
 
+type mockUserRepo struct {
+	user domain.User
+}
+
+func (m *mockUserRepo) Create(ctx context.Context, u domain.User) error { return nil }
+func (m *mockUserRepo) FindByEmail(ctx context.Context, email string) (domain.User, error) {
+	return m.user, nil
+}
+func (m *mockUserRepo) FindByID(ctx context.Context, id domain.ID) (domain.User, error) {
+	return m.user, nil
+}
+func (m *mockUserRepo) UpdateProfile(ctx context.Context, id domain.ID, name, phone *string, at time.Time) error {
+	return nil
+}
+func (m *mockUserRepo) UpdatePasswordHash(ctx context.Context, id domain.ID, hash string, at time.Time) error {
+	return nil
+}
+
 func TestEmailHandler_OrderCreated_SendsReceipt(t *testing.T) {
 	mailer := &mockMailer{}
-	handler := service.NewEmailHandler(mailer)
+
+	userID := domain.ID{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10}
+	user, _ := domain.NewUser(userID, "customer@test.local", "hash", "Cust", domain.RoleCustomer, "", time.Now())
+	users := &mockUserRepo{user: user}
+
+	handler := service.NewEmailHandler(mailer, users)
 
 	payload := map[string]any{
-		"id":             "order-123",
-		"user_id":        "user-456",
-		"total_minor":    70000,
-		"currency":       "KES",
-		"customer_email": "customer@test.local",
+		"id":          "order-123",
+		"user_id":     userID.String(),
+		"total_minor": 70000,
+		"currency":    "KES",
 	}
 	payloadBytes, _ := json.Marshal(payload)
 
@@ -60,11 +83,12 @@ func TestEmailHandler_OrderCreated_SendsReceipt(t *testing.T) {
 
 func TestEmailHandler_IgnoresOtherEvents(t *testing.T) {
 	mailer := &mockMailer{}
-	handler := service.NewEmailHandler(mailer)
+	users := &mockUserRepo{}
+	handler := service.NewEmailHandler(mailer, users)
 
 	evt := domain.OutboxEvent{
 		ID:        id1,
-		EventType: "OrderPaid", // Not OrderCreated
+		EventType: "OrderPaid",
 		Payload:   []byte(`{}`),
 	}
 
@@ -79,13 +103,18 @@ func TestEmailHandler_IgnoresOtherEvents(t *testing.T) {
 
 func TestEmailHandler_MailerFails_ReturnsError(t *testing.T) {
 	mailer := &mockMailer{fail: true}
-	handler := service.NewEmailHandler(mailer)
+
+	userID := domain.ID{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10}
+	user, _ := domain.NewUser(userID, "customer@test.local", "hash", "Cust", domain.RoleCustomer, "", time.Now())
+	users := &mockUserRepo{user: user}
+
+	handler := service.NewEmailHandler(mailer, users)
 
 	payload := map[string]any{
-		"id":             "order-123",
-		"customer_email": "customer@test.local",
-		"total_minor":    70000,
-		"currency":       "KES",
+		"id":          "order-123",
+		"user_id":     userID.String(),
+		"total_minor": 70000,
+		"currency":    "KES",
 	}
 	payloadBytes, _ := json.Marshal(payload)
 

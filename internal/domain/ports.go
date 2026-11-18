@@ -121,6 +121,7 @@ type OutboxRepository interface {
 	FetchPending(ctx context.Context, limit int) ([]OutboxEvent, error)
 	MarkPublished(ctx context.Context, id ID) error
 	MarkDead(ctx context.Context, id ID, reason string) error
+	FetchPublishedInRange(ctx context.Context, from, to time.Time, limit int) ([]OutboxEvent, error)
 }
 
 type EventPublisher interface {

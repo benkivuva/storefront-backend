@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/benkivuva/storefront-backend/internal/domain"
 	"github.com/benkivuva/storefront-backend/internal/service"
@@ -29,6 +30,10 @@ func (m *mockOutboxRepo) FetchPending(ctx context.Context, limit int) ([]domain.
 		return nil, m.fetchErr
 	}
 	return m.pendingEvents, nil
+}
+
+func (m *mockOutboxRepo) FetchPublishedInRange(ctx context.Context, from, to time.Time, limit int) ([]domain.OutboxEvent, error) {
+	return nil, nil
 }
 
 func (m *mockOutboxRepo) MarkPublished(ctx context.Context, id domain.ID) error {
