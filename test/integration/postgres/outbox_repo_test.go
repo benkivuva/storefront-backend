@@ -149,3 +149,76 @@ func TestOutboxRepo_SkipLocked(t *testing.T) {
 		t.Fatalf("expected 0 events due to SKIP LOCKED, got %d", len(events))
 	}
 }
+
+func TestOutboxRepo_DeletePublishedBefore(t *testing.T) {
+	pool, repo := setupOutboxDB(t)
+	ctx := context.Background()
+	gen := idgen.New()
+
+	// Create an old published event (8 days ago)
+	oldEvt := domain.OutboxEvent{
+		ID:            gen.NewID(),
+		AggregateType: "order",
+		AggregateID:   gen.NewID(),
+		EventType:     "OrderCreated",
+		Payload:       []byte(`{}`),
+		CreatedAt:     time.Now().Add(-8 * 24 * time.Hour),
+	}
+	_ = repo.Create(ctx, oldEvt)
+	_ = repo.MarkPublished(ctx, oldEvt.ID)
+	// Force the DB created_at to 8 days ago for the test
+	_, _ = pool.Exec(ctx, `UPDATE outbox_events SET created_at = $1 WHERE event_id = $2`, oldEvt.CreatedAt, oldEvt.ID.String())
+
+	// Create a fresh published event (today)
+	newEvt := domain.OutboxEvent{
+		ID:            gen.NewID(),
+		AggregateType: "order",
+		AggregateID:   gen.NewID(),
+		EventType:     "OrderCreated",
+		Payload:       []byte(`{}`),
+		CreatedAt:     time.Now(),
+	}
+	_ = repo.Create(ctx, newEvt)
+	_ = repo.MarkPublished(ctx, newEvt.ID)
+
+	// Create an old PENDING event (should NOT be deleted)
+	pendingEvt := domain.OutboxEvent{
+		ID:            gen.NewID(),
+		AggregateType: "order",
+		AggregateID:   gen.NewID(),
+		EventType:     "OrderCreated",
+		Payload:       []byte(`{}`),
+		CreatedAt:     time.Now().Add(-8 * 24 * time.Hour),
+	}
+	_ = repo.Create(ctx, pendingEvt)
+	_, _ = pool.Exec(ctx, `UPDATE outbox_events SET created_at = $1 WHERE event_id = $2`, pendingEvt.CreatedAt, pendingEvt.ID.String())
+
+	// Run the cleanup (delete published older than 7 days)
+	cutoff := time.Now().Add(-7 * 24 * time.Hour)
+	deletedCount, err := repo.DeletePublishedBefore(ctx, cutoff)
+	if err != nil {
+		t.Fatalf("DeletePublishedBefore: %v", err)
+	}
+	if deletedCount != 1 {
+		t.Errorf("expected 1 row deleted, got %d", deletedCount)
+	}
+
+	// Verify the old published event is gone
+	var count int
+	_ = pool.QueryRow(ctx, `SELECT count(*) FROM outbox_events WHERE event_id = $1`, oldEvt.ID.String()).Scan(&count)
+	if count != 0 {
+		t.Error("old published event should have been deleted")
+	}
+
+	// Verify the fresh published event still exists
+	_ = pool.QueryRow(ctx, `SELECT count(*) FROM outbox_events WHERE event_id = $1`, newEvt.ID.String()).Scan(&count)
+	if count != 1 {
+		t.Error("fresh published event should still exist")
+	}
+
+	// Verify the old PENDING event still exists (safety!)
+	_ = pool.QueryRow(ctx, `SELECT count(*) FROM outbox_events WHERE event_id = $1`, pendingEvt.ID.String()).Scan(&count)
+	if count != 1 {
+		t.Error("old pending event should NOT be deleted")
+	}
+}

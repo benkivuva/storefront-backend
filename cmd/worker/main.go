@@ -73,6 +73,8 @@ func run() error {
 	switch role {
 	case "relay":
 		err = runRelay(ctx, pool, rdb, sigCh)
+	case "cleanup":
+		err = runCleanup(ctx, pool)
 	case "consumer-email":
 		err = runEmailConsumer(ctx, pool, rdb, sigCh)
 	default:
@@ -140,4 +142,20 @@ func runEmailConsumer(ctx context.Context, pool *pgxpool.Pool, rdb *goredis.Clie
 			}
 		}
 	}
+}
+
+func runCleanup(ctx context.Context, pool *pgxpool.Pool) error {
+	outboxRepo := postgres.NewOutboxRepo(pool)
+
+	// Retention policy: keep published events for 7 days
+	cutoff := time.Now().Add(-7 * 24 * time.Hour)
+
+	slog.Info("starting outbox cleanup", "cutoff", cutoff)
+	deleted, err := outboxRepo.DeletePublishedBefore(ctx, cutoff)
+	if err != nil {
+		return fmt.Errorf("cleanup outbox: %w", err)
+	}
+
+	slog.Info("outbox cleanup complete", "rows_deleted", deleted)
+	return nil
 }

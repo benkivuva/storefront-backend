@@ -121,3 +121,13 @@ WHERE event_id = $1`, toUUID(id), reason)
 	}
 	return nil
 }
+
+func (r *OutboxRepo) DeletePublishedBefore(ctx context.Context, cutoff time.Time) (int64, error) {
+	tag, err := r.pool.Exec(ctx, `
+DELETE FROM outbox_events 
+WHERE status = 'published' AND created_at < $1`, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("delete published outbox events: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}

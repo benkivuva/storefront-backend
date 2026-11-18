@@ -122,6 +122,7 @@ type OutboxRepository interface {
 	MarkPublished(ctx context.Context, id ID) error
 	MarkDead(ctx context.Context, id ID, reason string) error
 	FetchPublishedInRange(ctx context.Context, from, to time.Time, limit int) ([]OutboxEvent, error)
+	DeletePublishedBefore(ctx context.Context, cutoff time.Time) (int64, error)
 }
 
 type EventPublisher interface {
