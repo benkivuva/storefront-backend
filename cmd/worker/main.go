@@ -18,6 +18,7 @@ import (
 	"github.com/benkivuva/storefront-backend/internal/adapter/postgres"
 	adapterredis "github.com/benkivuva/storefront-backend/internal/adapter/redis"
 	"github.com/benkivuva/storefront-backend/internal/config"
+	"github.com/benkivuva/storefront-backend/internal/domain"
 	"github.com/benkivuva/storefront-backend/internal/pkg/logging"
 	"github.com/benkivuva/storefront-backend/internal/service"
 )
@@ -125,7 +126,16 @@ func runEmailConsumer(ctx context.Context, pool *pgxpool.Pool, rdb *goredis.Clie
 	processedRepo := postgres.NewProcessedEventRepo(pool)
 	userRepo := postgres.NewUserRepo(pool)
 	reader := adapterredis.NewStreamReader(rdb, "events:order", "events:dlq")
-	mailerAdapter := mailer.NewLogMailer()
+	var mailerAdapter domain.Mailer
+	smtpAddr := os.Getenv("SMTP_ADDR")
+	if smtpAddr != "" {
+		smtpFrom := os.Getenv("SMTP_FROM")
+		mailerAdapter = mailer.NewSMTPMailer(smtpAddr, smtpFrom)
+		slog.Info("using SMTP mailer", "addr", smtpAddr)
+	} else {
+		mailerAdapter = mailer.NewLogMailer()
+		slog.Info("using log mailer (no SMTP_ADDR set)")
+	}
 
 	emailHandler := service.NewEmailHandler(mailerAdapter, userRepo)
 	consumer := service.NewConsumer("email-group", "worker-1", reader, processedRepo, emailHandler)
