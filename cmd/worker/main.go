@@ -29,13 +29,10 @@ func main() {
 }
 
 func run() error {
-	flag.Parse()
-	args := flag.Args()
-
-	if len(args) < 1 {
-		return fmt.Errorf("usage: worker <relay|consumer-email>")
+	if len(os.Args) < 2 {
+		return fmt.Errorf("usage: worker <relay|consumer-email|cleanup|replay>")
 	}
-	role := args[0]
+	role := os.Args[1]
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -73,10 +70,12 @@ func run() error {
 	switch role {
 	case "relay":
 		err = runRelay(ctx, pool, rdb, sigCh)
-	case "cleanup":
-		err = runCleanup(ctx, pool)
 	case "consumer-email":
 		err = runEmailConsumer(ctx, pool, rdb, sigCh)
+	case "cleanup":
+		err = runCleanup(ctx, pool)
+	case "replay":
+		err = runReplay(ctx, pool, rdb)
 	default:
 		return fmt.Errorf("unknown role: %s", role)
 	}
@@ -146,8 +145,6 @@ func runEmailConsumer(ctx context.Context, pool *pgxpool.Pool, rdb *goredis.Clie
 
 func runCleanup(ctx context.Context, pool *pgxpool.Pool) error {
 	outboxRepo := postgres.NewOutboxRepo(pool)
-
-	// Retention policy: keep published events for 7 days
 	cutoff := time.Now().Add(-7 * 24 * time.Hour)
 
 	slog.Info("starting outbox cleanup", "cutoff", cutoff)
@@ -157,5 +154,41 @@ func runCleanup(ctx context.Context, pool *pgxpool.Pool) error {
 	}
 
 	slog.Info("outbox cleanup complete", "rows_deleted", deleted)
+	return nil
+}
+
+func runReplay(ctx context.Context, pool *pgxpool.Pool, rdb *goredis.Client) error {
+	replayCmd := flag.NewFlagSet("replay", flag.ExitOnError)
+	fromFlag := replayCmd.String("from", "", "Start time (RFC3339)")
+	toFlag := replayCmd.String("to", "", "End time (RFC3339)")
+
+	if err := replayCmd.Parse(os.Args[2:]); err != nil {
+		return fmt.Errorf("parse flags: %w", err)
+	}
+
+	if *fromFlag == "" || *toFlag == "" {
+		return fmt.Errorf("usage: worker replay --from=<RFC3339> --to=<RFC3339>")
+	}
+
+	from, err := time.Parse(time.RFC3339, *fromFlag)
+	if err != nil {
+		return fmt.Errorf("parse --from: %w", err)
+	}
+	to, err := time.Parse(time.RFC3339, *toFlag)
+	if err != nil {
+		return fmt.Errorf("parse --to: %w", err)
+	}
+
+	outboxRepo := postgres.NewOutboxRepo(pool)
+	publisher := adapterredis.NewEventPublisher(rdb, "events")
+	replaySvc := service.NewReplayService(outboxRepo, publisher)
+
+	slog.Info("starting replay", "from", from, "to", to)
+	count, err := replaySvc.Replay(ctx, from, to)
+	if err != nil {
+		return fmt.Errorf("replay: %w", err)
+	}
+
+	slog.Info("replay complete", "events_replayed", count)
 	return nil
 }
