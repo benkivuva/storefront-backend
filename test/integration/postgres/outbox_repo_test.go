@@ -256,3 +256,60 @@ func TestOutboxRepo_TraceContext(t *testing.T) {
 		t.Errorf("expected trace context %s, got %s", evt.TraceContext, events[0].TraceContext)
 	}
 }
+
+func TestOutboxRepo_OldestPending(t *testing.T) {
+	pool, repo := setupOutboxDB(t)
+	ctx := context.Background()
+	gen := idgen.New()
+
+	// 1. Empty table should return zero time
+	zeroTime, err := repo.OldestPending(ctx)
+	if err != nil {
+		t.Fatalf("OldestPending (empty): %v", err)
+	}
+	if !zeroTime.IsZero() {
+		t.Errorf("expected zero time for empty table, got %v", zeroTime)
+	}
+
+	// 2. Insert a pending event
+	oldTime := time.Now().Add(-5 * time.Minute).Truncate(time.Millisecond)
+	evt1 := domain.OutboxEvent{
+		ID:            gen.NewID(),
+		AggregateType: "order",
+		AggregateID:   gen.NewID(),
+		EventType:     "OrderCreated",
+		Payload:       []byte(`{}`),
+		CreatedAt:     oldTime,
+	}
+	_ = repo.Create(ctx, evt1)
+	_, _ = pool.Exec(ctx, `UPDATE outbox_events SET created_at = $1 WHERE event_id = $2`, oldTime, evt1.ID.String())
+
+	// 3. Insert a newer pending event
+	newTime := time.Now().Truncate(time.Millisecond)
+	evt2 := domain.OutboxEvent{
+		ID:            gen.NewID(),
+		AggregateType: "order",
+		AggregateID:   gen.NewID(),
+		EventType:     "OrderPaid",
+		Payload:       []byte(`{}`),
+		CreatedAt:     newTime,
+	}
+	_ = repo.Create(ctx, evt2)
+
+	// 4. OldestPending should return the first event's time
+	oldest, err := repo.OldestPending(ctx)
+	if err != nil {
+		t.Fatalf("OldestPending: %v", err)
+	}
+
+	if !oldest.Equal(oldTime) {
+		t.Errorf("expected oldest time %v, got %v", oldTime, oldest)
+	}
+
+	// 5. Mark the old one published, should now return the newer time
+	_ = repo.MarkPublished(ctx, evt1.ID)
+	oldest, _ = repo.OldestPending(ctx)
+	if !oldest.Equal(newTime) {
+		t.Errorf("expected oldest time %v, got %v", newTime, oldest)
+	}
+}

@@ -24,22 +24,15 @@ type mockOutboxRepo struct {
 }
 
 func (m *mockOutboxRepo) Create(ctx context.Context, e domain.OutboxEvent) error { return nil }
-
 func (m *mockOutboxRepo) FetchPending(ctx context.Context, limit int) ([]domain.OutboxEvent, error) {
 	if m.fetchErr != nil {
 		return nil, m.fetchErr
 	}
 	return m.pendingEvents, nil
 }
-
-func (m *mockOutboxRepo) DeletePublishedBefore(ctx context.Context, cutoff time.Time) (int64, error) {
-	return 0, nil
-}
-
 func (m *mockOutboxRepo) FetchPublishedInRange(ctx context.Context, from, to time.Time, limit int) ([]domain.OutboxEvent, error) {
 	return nil, nil
 }
-
 func (m *mockOutboxRepo) MarkPublished(ctx context.Context, id domain.ID) error {
 	if m.markPubErr != nil {
 		return m.markPubErr
@@ -47,10 +40,15 @@ func (m *mockOutboxRepo) MarkPublished(ctx context.Context, id domain.ID) error 
 	m.publishedIDs = append(m.publishedIDs, id)
 	return nil
 }
-
 func (m *mockOutboxRepo) MarkDead(ctx context.Context, id domain.ID, reason string) error {
 	m.deadIDs = append(m.deadIDs, id)
 	return nil
+}
+func (m *mockOutboxRepo) DeletePublishedBefore(ctx context.Context, cutoff time.Time) (int64, error) {
+	return 0, nil
+}
+func (m *mockOutboxRepo) OldestPending(ctx context.Context) (time.Time, error) {
+	return time.Time{}, nil
 }
 
 type mockPublisher struct {

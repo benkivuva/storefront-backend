@@ -2,9 +2,11 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/benkivuva/storefront-backend/internal/domain"
@@ -132,4 +134,21 @@ WHERE status = 'published' AND created_at < $1`, cutoff)
 		return 0, fmt.Errorf("delete published outbox events: %w", err)
 	}
 	return tag.RowsAffected(), nil
+}
+
+func (r *OutboxRepo) OldestPending(ctx context.Context) (time.Time, error) {
+	var oldest time.Time
+	err := r.pool.QueryRow(ctx, `
+SELECT created_at FROM outbox_events 
+WHERE status = 'pending' 
+ORDER BY created_at ASC 
+LIMIT 1`).Scan(&oldest)
+
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return time.Time{}, nil
+		}
+		return time.Time{}, fmt.Errorf("oldest pending outbox: %w", err)
+	}
+	return oldest, nil
 }

@@ -19,12 +19,14 @@ func (m *mockReplayRepo) FetchPending(ctx context.Context, limit int) ([]domain.
 }
 func (m *mockReplayRepo) MarkPublished(ctx context.Context, id domain.ID) error           { return nil }
 func (m *mockReplayRepo) MarkDead(ctx context.Context, id domain.ID, reason string) error { return nil }
+func (m *mockReplayRepo) FetchPublishedInRange(ctx context.Context, from, to time.Time, limit int) ([]domain.OutboxEvent, error) {
+	return m.publishedEvents, nil
+}
 func (m *mockReplayRepo) DeletePublishedBefore(ctx context.Context, cutoff time.Time) (int64, error) {
 	return 0, nil
 }
-
-func (m *mockReplayRepo) FetchPublishedInRange(ctx context.Context, from, to time.Time, limit int) ([]domain.OutboxEvent, error) {
-	return m.publishedEvents, nil
+func (m *mockReplayRepo) OldestPending(ctx context.Context) (time.Time, error) {
+	return time.Time{}, nil
 }
 
 func TestReplayService_Replay(t *testing.T) {
