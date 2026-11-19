@@ -14,6 +14,7 @@ import (
 	goredis "github.com/redis/go-redis/v9"
 
 	"github.com/benkivuva/storefront-backend/internal/adapter/mailer"
+	"github.com/benkivuva/storefront-backend/internal/adapter/metrics"
 	"github.com/benkivuva/storefront-backend/internal/adapter/postgres"
 	adapterredis "github.com/benkivuva/storefront-backend/internal/adapter/redis"
 	"github.com/benkivuva/storefront-backend/internal/config"
@@ -91,6 +92,7 @@ func run() error {
 }
 
 func runRelay(ctx context.Context, pool *pgxpool.Pool, rdb *goredis.Client, sigCh chan os.Signal) error {
+	metrics.NewServer(postgres.NewOutboxRepo(pool), rdb, ":9091").Start(ctx)
 	outboxRepo := postgres.NewOutboxRepo(pool)
 	publisher := adapterredis.NewEventPublisher(rdb, "events")
 	relay := service.NewOutboxRelay(outboxRepo, publisher)
@@ -114,6 +116,7 @@ func runRelay(ctx context.Context, pool *pgxpool.Pool, rdb *goredis.Client, sigC
 }
 
 func runEmailConsumer(ctx context.Context, pool *pgxpool.Pool, rdb *goredis.Client, sigCh chan os.Signal) error {
+	metrics.NewServer(postgres.NewOutboxRepo(pool), rdb, ":9091").Start(ctx)
 	err := rdb.XGroupCreateMkStream(ctx, "events:order", "email-group", "0").Err()
 	if err != nil && err.Error() != "BUSYGROUP Consumer Group name already exists" {
 		return fmt.Errorf("create consumer group: %w", err)
