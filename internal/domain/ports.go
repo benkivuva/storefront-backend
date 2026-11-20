@@ -191,3 +191,64 @@ type MailMessage struct {
 type Mailer interface {
 	Send(ctx context.Context, msg MailMessage) error
 }
+
+type InitiateRequest struct {
+	PaymentID     ID
+	OrderID       ID
+	AmountMinor   int64
+	Currency      string
+	Method        PaymentMethod
+	CustomerPhone string
+	Email         string
+	Reference     string
+	CallbackURL   string
+}
+
+type NextAction struct {
+	Type string // "redirect", "await_prompt", "none"
+	URL  string // For redirect
+}
+
+type InitiateResult struct {
+	ProviderRef string
+	NextAction  NextAction
+}
+
+type WebhookEvent struct {
+	ProviderEventID string
+	ProviderRef     string
+	Status          PaymentStatus
+	AmountMinor     int64
+	Currency        string
+	ProviderTxnID   string
+	FailureReason   string
+	RawPayload      []byte
+}
+
+type RefundRequest struct {
+	PaymentID   ID
+	AmountMinor int64
+	Reason      string
+}
+
+type RefundResult struct {
+	ProviderRef string
+	Status      string
+}
+
+// PaymentProvider is the port for all payment gateways (Paystack, Daraja, Mock).
+type PaymentProvider interface {
+	Name() string
+	Initiate(ctx context.Context, req InitiateRequest) (InitiateResult, error)
+	VerifyWebhook(ctx context.Context, rawBody []byte, headers map[string]string) (WebhookEvent, error)
+	Status(ctx context.Context, providerRef string) (WebhookEvent, error)
+	Refund(ctx context.Context, req RefundRequest) (RefundResult, error)
+}
+
+// PaymentRepository is the database port for payments.
+type PaymentRepository interface {
+	Create(ctx context.Context, p *Payment) error
+	GetByID(ctx context.Context, id ID) (*Payment, error)
+	GetByProviderRef(ctx context.Context, provider, ref string) (*Payment, error)
+	UpdateStatus(ctx context.Context, p *Payment) error
+}
