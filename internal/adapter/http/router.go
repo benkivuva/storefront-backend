@@ -1,6 +1,10 @@
 package httpsrv
 
 import (
+	"bytes"
+	"time"
+
+	"github.com/benkivuva/storefront-backend/api"
 	"net/http"
 	"net/netip"
 
@@ -162,15 +166,17 @@ func NewPublicRouter(cfg RouterConfig) chi.Router {
 }
 
 func NewInternalRouter(ready *Ready) chi.Router {
+	var openapiYaml, _ = api.FS.ReadFile("openapi.yaml")
+	var docsHtml, _ = api.FS.ReadFile("docs.html")
 	r := chi.NewRouter()
 	r.Method(http.MethodGet, "/healthz", HealthHandler())
 	r.Method(http.MethodGet, "/readyz", ready.Handler())
 	r.Method(http.MethodGet, "/metrics", promhttp.Handler())
 	r.Get("/api/v1/openapi.yaml", func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, "api/openapi.yaml")
+		http.ServeContent(w, r, "openapi.yaml", time.Now(), bytes.NewReader(openapiYaml))
 	})
 	r.Get("/api/v1/docs", func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, "api/docs.html")
+		http.ServeContent(w, r, "docs.html", time.Now(), bytes.NewReader(docsHtml))
 	})
 	return r
 }
