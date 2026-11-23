@@ -123,3 +123,35 @@ func (p *Payment) ProviderTxnID() string { return p.providerTxnID }
 func (p *Payment) FailureReason() string { return p.failureReason }
 func (p *Payment) CreatedAt() time.Time  { return p.createdAt }
 func (p *Payment) UpdatedAt() time.Time  { return p.updatedAt }
+
+type PaymentRecord struct {
+	ID            ID
+	OrderID       ID
+	Provider      string
+	Method        PaymentMethod
+	Status        PaymentStatus
+	AmountMinor   int64
+	Currency      string
+	ProviderRef   string
+	ProviderTxnID string
+	FailureReason string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
+func RehydratePayment(r PaymentRecord) *Payment {
+	return &Payment{
+		id:            r.ID,
+		orderID:       r.OrderID,
+		provider:      r.Provider,
+		method:        r.Method,
+		status:        r.Status,
+		amountMinor:   r.AmountMinor,
+		currency:      r.Currency,
+		providerRef:   r.ProviderRef,
+		providerTxnID: r.ProviderTxnID,
+		failureReason: r.FailureReason,
+		createdAt:     r.CreatedAt,
+		updatedAt:     r.UpdatedAt,
+	}
+}
