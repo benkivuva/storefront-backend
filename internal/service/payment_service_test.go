@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/benkivuva/storefront-backend/internal/domain"
+	"github.com/benkivuva/storefront-backend/internal/pkg/idgen"
 	"github.com/benkivuva/storefront-backend/internal/service"
 )
 
@@ -115,7 +116,7 @@ func TestInitiatePayment_Success(t *testing.T) {
 	}
 	clk := &fakeClock{t: time.Now()}
 
-	svc := service.NewPaymentService(orderRepo, paymentRepo, prov, clk)
+	svc := service.NewPaymentService(orderRepo, paymentRepo, prov, idgen.New(), clk)
 
 	res, err := svc.InitiatePayment(context.Background(), order.ID(), domain.MethodCard, "")
 	if err != nil {
@@ -145,7 +146,7 @@ func TestInitiatePayment_OrderNotFound(t *testing.T) {
 	prov := &mockProvider{}
 	clk := &fakeClock{t: time.Now()}
 
-	svc := service.NewPaymentService(orderRepo, paymentRepo, prov, clk)
+	svc := service.NewPaymentService(orderRepo, paymentRepo, prov, idgen.New(), clk)
 
 	_, err := svc.InitiatePayment(context.Background(), domain.ID{0xff}, domain.MethodCard, "")
 	if err == nil {
@@ -160,7 +161,7 @@ func TestInitiatePayment_ProviderFails_MarksFailed(t *testing.T) {
 	prov := &mockProvider{initiateErr: errors.New("gateway down")}
 	clk := &fakeClock{t: time.Now()}
 
-	svc := service.NewPaymentService(orderRepo, paymentRepo, prov, clk)
+	svc := service.NewPaymentService(orderRepo, paymentRepo, prov, idgen.New(), clk)
 
 	_, err := svc.InitiatePayment(context.Background(), order.ID(), domain.MethodCard, "")
 	if err == nil {
