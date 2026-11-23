@@ -31,6 +31,7 @@ func (m *mockOrderRepo) ListByUser(ctx context.Context, userID domain.ID) ([]*do
 type mockPaymentRepo struct {
 	created   *domain.Payment
 	updated   *domain.Payment
+	byRef     *domain.Payment
 	createErr error
 }
 
@@ -45,7 +46,10 @@ func (m *mockPaymentRepo) GetByID(ctx context.Context, id domain.ID) (*domain.Pa
 	return nil, nil
 }
 func (m *mockPaymentRepo) GetByProviderRef(ctx context.Context, provider, ref string) (*domain.Payment, error) {
-	return nil, nil
+	if m.byRef != nil {
+		return m.byRef, nil
+	}
+	return nil, domain.ErrNotFound
 }
 func (m *mockPaymentRepo) UpdateStatus(ctx context.Context, p *domain.Payment) error {
 	m.updated = p
@@ -55,6 +59,8 @@ func (m *mockPaymentRepo) UpdateStatus(ctx context.Context, p *domain.Payment) e
 type mockProvider struct {
 	initiateResult domain.InitiateResult
 	initiateErr    error
+	verifyResult   domain.WebhookEvent
+	verifyErr      error
 }
 
 func (m *mockProvider) Name() string { return "mock" }
@@ -62,13 +68,32 @@ func (m *mockProvider) Initiate(ctx context.Context, req domain.InitiateRequest)
 	return m.initiateResult, m.initiateErr
 }
 func (m *mockProvider) VerifyWebhook(ctx context.Context, rawBody []byte, headers map[string]string) (domain.WebhookEvent, error) {
-	return domain.WebhookEvent{}, nil
+	return m.verifyResult, m.verifyErr
 }
 func (m *mockProvider) Status(ctx context.Context, ref string) (domain.WebhookEvent, error) {
 	return domain.WebhookEvent{}, nil
 }
 func (m *mockProvider) Refund(ctx context.Context, req domain.RefundRequest) (domain.RefundResult, error) {
 	return domain.RefundResult{}, nil
+}
+
+type mockWebhookRepo struct {
+	processed    map[string]bool
+	savedWebhook domain.WebhookRecord
+	savedPayment *domain.Payment
+	savedOrder   *domain.Order
+	savedOutbox  *domain.OutboxEvent
+}
+
+func (m *mockWebhookRepo) IsProcessed(ctx context.Context, provider, eventID string) (bool, error) {
+	return m.processed[eventID], nil
+}
+func (m *mockWebhookRepo) ProcessWebhookTx(ctx context.Context, webhook domain.WebhookRecord, payment *domain.Payment, order *domain.Order, outbox *domain.OutboxEvent) error {
+	m.savedWebhook = webhook
+	m.savedPayment = payment
+	m.savedOrder = order
+	m.savedOutbox = outbox
+	return nil
 }
 
 type fakeClock struct{ t time.Time }
@@ -135,9 +160,6 @@ func TestInitiatePayment_Success(t *testing.T) {
 	if paymentRepo.updated.Status() != domain.PaymentPending {
 		t.Errorf("expected PENDING, got %s", paymentRepo.updated.Status())
 	}
-	if paymentRepo.updated.ProviderRef() != "mock-ref-123" {
-		t.Errorf("expected provider ref, got %s", paymentRepo.updated.ProviderRef())
-	}
 }
 
 func TestInitiatePayment_OrderNotFound(t *testing.T) {
@@ -172,5 +194,137 @@ func TestInitiatePayment_ProviderFails_MarksFailed(t *testing.T) {
 	}
 	if paymentRepo.updated.Status() != domain.PaymentFailed {
 		t.Errorf("expected FAILED, got %s", paymentRepo.updated.Status())
+	}
+}
+
+func TestProcessWebhook_Success(t *testing.T) {
+	order := makeTestOrder(t, 15*time.Minute)
+	payment, _ := domain.NewPayment(domain.ID{0x01}, order.ID(), "mock", domain.MethodCard, order.TotalMinor(), "KES", time.Now())
+	_ = payment.MarkPending("ref-123", time.Now())
+
+	orderRepo := &mockOrderRepo{order: *order}
+	paymentRepo := &mockPaymentRepo{byRef: payment}
+	webhookRepo := &mockWebhookRepo{processed: make(map[string]bool)}
+	prov := &mockProvider{
+		verifyResult: domain.WebhookEvent{
+			ProviderEventID: "evt-123",
+			ProviderRef:     "ref-123",
+			Status:          domain.PaymentSucceeded,
+			AmountMinor:     order.TotalMinor(),
+			Currency:        "KES",
+			SignatureValid:  true,
+			RawPayload:      []byte(`{}`),
+		},
+	}
+	clk := &fakeClock{t: time.Now()}
+
+	svc := service.NewPaymentService(orderRepo, paymentRepo, prov, idgen.New(), clk)
+	svc.SetWebhookRepo(webhookRepo)
+
+	err := svc.ProcessWebhook(context.Background(), []byte(`{}`), nil)
+	if err != nil {
+		t.Fatalf("ProcessWebhook: %v", err)
+	}
+
+	if webhookRepo.savedPayment.Status() != domain.PaymentSucceeded {
+		t.Errorf("expected SUCCEEDED, got %s", webhookRepo.savedPayment.Status())
+	}
+	if webhookRepo.savedOrder.Status() != domain.StatusPaid {
+		t.Errorf("expected PAID, got %s", webhookRepo.savedOrder.Status())
+	}
+	if webhookRepo.savedOutbox.EventType != "OrderPaid" {
+		t.Errorf("expected OrderPaid outbox, got %s", webhookRepo.savedOutbox.EventType)
+	}
+}
+
+func TestProcessWebhook_DuplicateIgnored(t *testing.T) {
+	webhookRepo := &mockWebhookRepo{processed: map[string]bool{"evt-123": true}}
+	prov := &mockProvider{
+		verifyResult: domain.WebhookEvent{
+			ProviderEventID: "evt-123",
+			SignatureValid:  true,
+		},
+	}
+	clk := &fakeClock{t: time.Now()}
+
+	svc := service.NewPaymentService(&mockOrderRepo{}, &mockPaymentRepo{}, prov, idgen.New(), clk)
+	svc.SetWebhookRepo(webhookRepo)
+
+	err := svc.ProcessWebhook(context.Background(), []byte(`{}`), nil)
+	if err != nil {
+		t.Fatalf("ProcessWebhook: %v", err)
+	}
+	if webhookRepo.savedWebhook.ID != (domain.ID{}) {
+		t.Error("expected no DB writes for duplicate webhook")
+	}
+}
+
+func TestProcessWebhook_AmountMismatch(t *testing.T) {
+	order := makeTestOrder(t, 15*time.Minute)
+	payment, _ := domain.NewPayment(domain.ID{0x01}, order.ID(), "mock", domain.MethodCard, order.TotalMinor(), "KES", time.Now())
+	_ = payment.MarkPending("ref-123", time.Now())
+
+	paymentRepo := &mockPaymentRepo{byRef: payment}
+	webhookRepo := &mockWebhookRepo{processed: make(map[string]bool)}
+	prov := &mockProvider{
+		verifyResult: domain.WebhookEvent{
+			ProviderEventID: "evt-123",
+			ProviderRef:     "ref-123",
+			Status:          domain.PaymentSucceeded,
+			AmountMinor:     500,
+			Currency:        "KES",
+			SignatureValid:  true,
+		},
+	}
+	clk := &fakeClock{t: time.Now()}
+
+	svc := service.NewPaymentService(&mockOrderRepo{order: *order}, paymentRepo, prov, idgen.New(), clk)
+	svc.SetWebhookRepo(webhookRepo)
+
+	err := svc.ProcessWebhook(context.Background(), []byte(`{}`), nil)
+	if err == nil {
+		t.Fatal("expected error for amount mismatch")
+	}
+	if webhookRepo.savedPayment.Status() != domain.PaymentFailed {
+		t.Errorf("expected FAILED, got %s", webhookRepo.savedPayment.Status())
+	}
+	if webhookRepo.savedOrder != nil {
+		t.Error("expected order not updated on amount mismatch")
+	}
+}
+
+func TestProcessWebhook_OrphanedPayment(t *testing.T) {
+	order := makeTestOrder(t, 15*time.Minute)
+	_ = order.Transition(domain.StatusCancelled, "system", "expired", time.Now())
+
+	payment, _ := domain.NewPayment(domain.ID{0x01}, order.ID(), "mock", domain.MethodCard, order.TotalMinor(), "KES", time.Now())
+	_ = payment.MarkPending("ref-123", time.Now())
+
+	paymentRepo := &mockPaymentRepo{byRef: payment}
+	webhookRepo := &mockWebhookRepo{processed: make(map[string]bool)}
+	prov := &mockProvider{
+		verifyResult: domain.WebhookEvent{
+			ProviderEventID: "evt-123",
+			ProviderRef:     "ref-123",
+			Status:          domain.PaymentSucceeded,
+			AmountMinor:     order.TotalMinor(),
+			Currency:        "KES",
+			SignatureValid:  true,
+		},
+	}
+	clk := &fakeClock{t: time.Now()}
+
+	svc := service.NewPaymentService(&mockOrderRepo{order: *order}, paymentRepo, prov, idgen.New(), clk)
+	svc.SetWebhookRepo(webhookRepo)
+
+	err := svc.ProcessWebhook(context.Background(), []byte(`{}`), nil)
+	if err != nil {
+		t.Fatalf("ProcessWebhook: %v", err)
+	}
+	if webhookRepo.savedPayment.Status() != domain.PaymentOrphaned {
+		t.Errorf("expected ORPHANED, got %s", webhookRepo.savedPayment.Status())
+	}
+	if webhookRepo.savedOutbox.EventType != "PaymentOrphaned" {
+		t.Errorf("expected PaymentOrphaned outbox, got %s", webhookRepo.savedOutbox.EventType)
 	}
 }

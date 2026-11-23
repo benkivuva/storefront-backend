@@ -223,6 +223,7 @@ type WebhookEvent struct {
 	ProviderTxnID   string
 	FailureReason   string
 	RawPayload      []byte
+	SignatureValid  bool
 }
 
 type RefundRequest struct {
@@ -251,4 +252,21 @@ type PaymentRepository interface {
 	GetByID(ctx context.Context, id ID) (*Payment, error)
 	GetByProviderRef(ctx context.Context, provider, ref string) (*Payment, error)
 	UpdateStatus(ctx context.Context, p *Payment) error
+}
+
+type WebhookRecord struct {
+	ID              ID
+	Provider        string
+	ProviderEventID string
+	SignatureValid  bool
+	RawBody         []byte
+	SourceIP        string
+	ReceivedAt      time.Time
+}
+
+// WebhookRepository handles the atomic transaction required when processing a webhook.
+type WebhookRepository interface {
+	IsProcessed(ctx context.Context, provider, eventID string) (bool, error)
+	// ProcessWebhookTx atomically saves the webhook event, updates the payment, updates the order (if not nil), and writes the outbox event (if not nil).
+	ProcessWebhookTx(ctx context.Context, webhook WebhookRecord, payment *Payment, order *Order, outbox *OutboxEvent) error
 }

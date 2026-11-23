@@ -2,17 +2,20 @@ package service
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/benkivuva/storefront-backend/internal/domain"
 )
 
 type PaymentService struct {
-	orders   domain.OrderRepository
-	payments domain.PaymentRepository
-	provider domain.PaymentProvider
-	ids      domain.IDGenerator
-	clock    domain.Clock
+	orders      domain.OrderRepository
+	payments    domain.PaymentRepository
+	webhookRepo domain.WebhookRepository
+	provider    domain.PaymentProvider
+	ids         domain.IDGenerator
+	clock       domain.Clock
 }
 
 func NewPaymentService(
@@ -29,6 +32,10 @@ func NewPaymentService(
 		ids:      ids,
 		clock:    clock,
 	}
+}
+
+func (s *PaymentService) SetWebhookRepo(repo domain.WebhookRepository) {
+	s.webhookRepo = repo
 }
 
 func (s *PaymentService) InitiatePayment(ctx context.Context, orderID domain.ID, method domain.PaymentMethod, customerPhone string) (domain.InitiateResult, error) {
@@ -81,4 +88,107 @@ func (s *PaymentService) InitiatePayment(ctx context.Context, orderID domain.ID,
 	}
 
 	return result, nil
+}
+
+func (s *PaymentService) ProcessWebhook(ctx context.Context, rawBody []byte, headers map[string]string) error {
+	evt, err := s.provider.VerifyWebhook(ctx, rawBody, headers)
+	if err != nil {
+		return fmt.Errorf("verify webhook: %w", err)
+	}
+
+	now := s.clock.Now()
+	webhookRec := domain.WebhookRecord{
+		ID:              s.ids.NewID(),
+		Provider:        s.provider.Name(),
+		ProviderEventID: evt.ProviderEventID,
+		SignatureValid:  evt.SignatureValid,
+		RawBody:         rawBody,
+		ReceivedAt:      now,
+	}
+
+	if !evt.SignatureValid {
+		_ = s.webhookRepo.ProcessWebhookTx(ctx, webhookRec, nil, nil, nil)
+		return errors.New("invalid webhook signature")
+	}
+
+	processed, err := s.webhookRepo.IsProcessed(ctx, s.provider.Name(), evt.ProviderEventID)
+	if err != nil {
+		return fmt.Errorf("check idempotency: %w", err)
+	}
+	if processed {
+		return nil
+	}
+
+	payment, err := s.payments.GetByProviderRef(ctx, s.provider.Name(), evt.ProviderRef)
+	if err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			return fmt.Errorf("payment not found for provider ref %s", evt.ProviderRef)
+		}
+		return fmt.Errorf("fetch payment: %w", err)
+	}
+
+	if payment.Status() == domain.PaymentSucceeded {
+		return s.webhookRepo.ProcessWebhookTx(ctx, webhookRec, nil, nil, nil)
+	}
+
+	if payment.AmountMinor() != evt.AmountMinor || payment.Currency() != evt.Currency {
+		_ = payment.MarkFailed("amount/currency mismatch from webhook", now)
+		_ = s.webhookRepo.ProcessWebhookTx(ctx, webhookRec, payment, nil, nil)
+		return fmt.Errorf("webhook amount mismatch: expected %d %s, got %d %s",
+			payment.AmountMinor(), payment.Currency(), evt.AmountMinor, evt.Currency)
+	}
+
+	order, err := s.orders.GetByID(ctx, payment.OrderID())
+	if err != nil {
+		return fmt.Errorf("fetch order for payment: %w", err)
+	}
+
+	switch evt.Status {
+	case domain.PaymentSucceeded:
+		if order.Status() == domain.StatusCancelled {
+			_ = payment.MarkOrphaned("payment arrived after order cancellation", now)
+			payload, _ := json.Marshal(map[string]any{
+				"payment_id": payment.ID().String(),
+				"order_id":   order.ID().String(),
+				"amount":     payment.AmountMinor(),
+			})
+			outbox := domain.OutboxEvent{
+				ID:            s.ids.NewID(),
+				AggregateType: "payment",
+				AggregateID:   payment.ID(),
+				EventType:     "PaymentOrphaned",
+				Payload:       payload,
+				CreatedAt:     now,
+			}
+			return s.webhookRepo.ProcessWebhookTx(ctx, webhookRec, payment, nil, &outbox)
+		}
+
+		if order.Status() == domain.StatusPendingPayment {
+			_ = payment.MarkSucceeded(evt.ProviderTxnID, now)
+			if err := order.Transition(domain.StatusPaid, "payment_webhook", "provider confirmed", now); err != nil {
+				return fmt.Errorf("order transition: %w", err)
+			}
+
+			payload, _ := json.Marshal(map[string]any{
+				"order_id":    order.ID().String(),
+				"payment_id":  payment.ID().String(),
+				"total_minor": order.TotalMinor(),
+			})
+			outbox := domain.OutboxEvent{
+				ID:            s.ids.NewID(),
+				AggregateType: "order",
+				AggregateID:   order.ID(),
+				EventType:     "OrderPaid",
+				Payload:       payload,
+				CreatedAt:     now,
+			}
+			return s.webhookRepo.ProcessWebhookTx(ctx, webhookRec, payment, order, &outbox)
+		}
+
+	case domain.PaymentFailed:
+		_ = payment.MarkFailed(evt.FailureReason, now)
+		return s.webhookRepo.ProcessWebhookTx(ctx, webhookRec, payment, nil, nil)
+	}
+
+	return nil
 }
