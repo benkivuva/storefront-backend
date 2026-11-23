@@ -17,6 +17,7 @@ import (
 	httpsrv "github.com/benkivuva/storefront-backend/internal/adapter/http"
 	"github.com/benkivuva/storefront-backend/internal/adapter/http/handlers"
 	"github.com/benkivuva/storefront-backend/internal/adapter/http/middleware"
+	"github.com/benkivuva/storefront-backend/internal/adapter/payments/mock"
 	"github.com/benkivuva/storefront-backend/internal/adapter/postgres"
 	adapterredis "github.com/benkivuva/storefront-backend/internal/adapter/redis"
 	"github.com/benkivuva/storefront-backend/internal/config"
@@ -144,6 +145,12 @@ func run() error {
 	idemRepo := postgres.NewIdempotencyRepo(pool)
 	orderRepo := postgres.NewOrderRepo(pool, idgen.New())
 
+	// --- Sprint 6: Payments Wiring ---
+	paymentRepo := postgres.NewPaymentRepo(pool)
+	webhookRepo := postgres.NewWebhookRepo(pool)
+	paymentProvider := mock.NewProvider()
+	// ---
+
 	hasher := hashingadapter.NewHasher(hashing.DefaultParams())
 	signer := middleware.NewJWTSigner(ks)
 	clk := clock.New()
@@ -165,12 +172,19 @@ func run() error {
 	checkoutSvc := service.NewCheckoutService(cartRepo, productRepo, addressRepo, checkoutRepo, gen, clk)
 	orderSvc := service.NewOrderService(orderRepo)
 
+	// --- Sprint 6: Payment Service Wiring ---
+	paymentSvc := service.NewPaymentService(orderRepo, paymentRepo, paymentProvider, gen, clk)
+	paymentSvc.SetWebhookRepo(webhookRepo)
+	// ---
+
 	authHandler := handlers.NewAuthHandler(authSvc, trustedProxies, cfg.JWTRefreshTTL, cfg.CookieSecure())
 	meHandler := handlers.NewMeHandler(authSvc)
 	catalogHandler := handlers.NewCatalogHandler(catalogSvc)
 	cartHandler := handlers.NewCartHandler(cartSvc)
 	checkoutHandler := handlers.NewCheckoutHandler(checkoutSvc)
 	orderHandler := handlers.NewOrderHandler(orderSvc)
+
+	// Note: We will add paymentHandler and webhookHandler here in the next step.
 
 	ready := httpsrv.NewReady()
 	publicRouter := httpsrv.NewPublicRouter(httpsrv.RouterConfig{
