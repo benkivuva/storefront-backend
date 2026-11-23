@@ -2,15 +2,14 @@ package httpsrv
 
 import (
 	"bytes"
-	"time"
-
-	"github.com/benkivuva/storefront-backend/api"
 	"net/http"
 	"net/netip"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	"github.com/benkivuva/storefront-backend/api"
 	"github.com/benkivuva/storefront-backend/internal/adapter/http/dto"
 	"github.com/benkivuva/storefront-backend/internal/adapter/http/handlers"
 	"github.com/benkivuva/storefront-backend/internal/adapter/http/middleware"
@@ -29,6 +28,7 @@ type RouterConfig struct {
 	CartHandler     *handlers.CartHandler
 	CheckoutHandler *handlers.CheckoutHandler
 	OrderHandler    *handlers.OrderHandler
+	PaymentHandler  *handlers.PaymentHandler
 	JWTVerifier     middleware.TokenVerifier
 	IdempotencyRepo domain.IdempotencyRepository
 	AuthLimiter     middleware.RateLimiter
@@ -121,6 +121,13 @@ func NewPublicRouter(cfg RouterConfig) chi.Router {
 		}))
 		r.Get("/", cfg.OrderHandler.ListOrders)
 		r.Get("/{id}", cfg.OrderHandler.GetOrder)
+
+		r.With(middleware.Idempotency(cfg.IdempotencyRepo)).
+			Post("/{id}/payments", cfg.PaymentHandler.InitiatePayment)
+	})
+
+	r.Route("/api/v1/webhooks", func(r chi.Router) {
+		r.Post("/mock", cfg.PaymentHandler.HandleWebhook)
 	})
 
 	r.Route("/api/v1/products", func(r chi.Router) {

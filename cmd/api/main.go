@@ -183,8 +183,7 @@ func run() error {
 	cartHandler := handlers.NewCartHandler(cartSvc)
 	checkoutHandler := handlers.NewCheckoutHandler(checkoutSvc)
 	orderHandler := handlers.NewOrderHandler(orderSvc)
-
-	// Note: We will add paymentHandler and webhookHandler here in the next step.
+	paymentHandler := handlers.NewPaymentHandler(paymentSvc)
 
 	ready := httpsrv.NewReady()
 	publicRouter := httpsrv.NewPublicRouter(httpsrv.RouterConfig{
@@ -194,6 +193,7 @@ func run() error {
 		CartHandler:     cartHandler,
 		CheckoutHandler: checkoutHandler,
 		OrderHandler:    orderHandler,
+		PaymentHandler:  paymentHandler,
 		JWTVerifier:     middleware.NewJWTVerifier(ks),
 		IdempotencyRepo: idemRepo,
 		AuthLimiter:     rateLimiterAdapter{inner: authRedisLimiter},
