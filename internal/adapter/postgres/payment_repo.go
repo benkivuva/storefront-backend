@@ -47,6 +47,13 @@ FROM payments WHERE provider = $1 AND provider_ref = $2`, provider, ref)
 	return scanPayment(row)
 }
 
+func (r *PaymentRepo) GetLatestByOrderID(ctx context.Context, orderID domain.ID) (*domain.Payment, error) {
+	row := r.pool.QueryRow(ctx, `
+SELECT id, order_id, provider, method, status, amount_minor, currency, coalesce(provider_ref, ''), coalesce(provider_txn_id, ''), coalesce(failure_reason, ''), created_at, updated_at
+FROM payments WHERE order_id = $1 ORDER BY created_at DESC LIMIT 1`, toUUID(orderID))
+	return scanPayment(row)
+}
+
 func (r *PaymentRepo) UpdateStatus(ctx context.Context, p *domain.Payment) error {
 	_, err := r.pool.Exec(ctx, `
 UPDATE payments SET 

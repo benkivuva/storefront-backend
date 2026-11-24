@@ -198,3 +198,93 @@ func (s *PaymentService) ProcessWebhook(ctx context.Context, rawBody []byte, hea
 
 	return nil
 }
+
+func (s *PaymentService) ReapExpiredOrders(ctx context.Context) (int, error) {
+	now := s.clock.Now()
+	orders, err := s.orders.ListExpiredPending(ctx, now, 100)
+	if err != nil {
+		return 0, fmt.Errorf("list expired orders: %w", err)
+	}
+
+	reaped := 0
+	for _, order := range orders {
+		payment, err := s.payments.GetLatestByOrderID(ctx, order.ID())
+		if err != nil {
+			continue // No payment found, skip
+		}
+
+		if payment.Status() == domain.PaymentPending {
+			// CRITICAL: Ask the provider if the money actually arrived before cancelling
+			statusEvt, err := s.provider.Status(ctx, payment.ProviderRef())
+			if err != nil {
+				// Provider is unreachable (Daraja network timeout). DO NOT cancel.
+				// Skip this order and retry on the next run.
+				continue
+			}
+
+			if statusEvt.Status == domain.PaymentSucceeded {
+				// Money arrived! Process it as a success instead of cancelling.
+				if payment.AmountMinor() == statusEvt.AmountMinor {
+					_ = payment.MarkSucceeded(statusEvt.ProviderTxnID, now)
+					if err := order.Transition(domain.StatusPaid, "reaper", "late provider confirmation", now); err != nil {
+						continue
+					}
+					payload, _ := json.Marshal(map[string]any{
+						"order_id":    order.ID().String(),
+						"payment_id":  payment.ID().String(),
+						"total_minor": order.TotalMinor(),
+					})
+					outbox := domain.OutboxEvent{
+						ID:            s.ids.NewID(),
+						AggregateType: "order",
+						AggregateID:   order.ID(),
+						EventType:     "OrderPaid",
+						Payload:       payload,
+						CreatedAt:     now,
+					}
+					webhookRec := domain.WebhookRecord{
+						ID: s.ids.NewID(), Provider: s.provider.Name(),
+						ProviderEventID: "reaper-" + order.ID().String(),
+						SignatureValid:  true, ReceivedAt: now,
+					}
+					if err := s.webhookRepo.ProcessWebhookTx(ctx, webhookRec, payment, order, &outbox); err == nil {
+						reaped++
+					}
+					continue
+				}
+			}
+		}
+
+		// Normal expiry: Mark payment expired, cancel order, release stock.
+		_ = payment.MarkExpired(now)
+		if err := order.Transition(domain.StatusCancelled, "reaper", "payment expired", now); err != nil {
+			continue
+		}
+
+		payload, _ := json.Marshal(map[string]any{
+			"order_id": order.ID().String(),
+			"reason":   "payment_expired",
+		})
+		outbox := domain.OutboxEvent{
+			ID:            s.ids.NewID(),
+			AggregateType: "order",
+			AggregateID:   order.ID(),
+			EventType:     "OrderCancelled",
+			Payload:       payload,
+			CreatedAt:     now,
+		}
+
+		webhookRec := domain.WebhookRecord{
+			ID: s.ids.NewID(), Provider: s.provider.Name(),
+			ProviderEventID: "reaper-cancel-" + order.ID().String(),
+			SignatureValid:  true, ReceivedAt: now,
+		}
+
+		// The repo will release the stock if the order status is CANCELLED
+		if err := s.webhookRepo.ProcessWebhookTx(ctx, webhookRec, payment, order, &outbox); err == nil {
+			reaped++
+		}
+	}
+
+	return reaped, nil
+}

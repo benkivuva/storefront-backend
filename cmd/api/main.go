@@ -147,7 +147,7 @@ func run() error {
 
 	// --- Sprint 6: Payments Wiring ---
 	paymentRepo := postgres.NewPaymentRepo(pool)
-	webhookRepo := postgres.NewWebhookRepo(pool)
+	webhookRepo := postgres.NewWebhookRepo(pool, idgen.New())
 	paymentProvider := mock.NewProvider()
 	// ---
 

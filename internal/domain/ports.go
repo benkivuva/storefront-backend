@@ -146,6 +146,7 @@ type OrderRepository interface {
 	GetByID(ctx context.Context, id ID) (*Order, error)
 	UpdateStatus(ctx context.Context, o *Order) error
 	ListByUser(ctx context.Context, userID ID) ([]*Order, error)
+	ListExpiredPending(ctx context.Context, before time.Time, limit int) ([]*Order, error)
 }
 
 type IdempotencyRecord struct {
@@ -237,7 +238,6 @@ type RefundResult struct {
 	Status      string
 }
 
-// PaymentProvider is the port for all payment gateways (Paystack, Daraja, Mock).
 type PaymentProvider interface {
 	Name() string
 	Initiate(ctx context.Context, req InitiateRequest) (InitiateResult, error)
@@ -246,11 +246,11 @@ type PaymentProvider interface {
 	Refund(ctx context.Context, req RefundRequest) (RefundResult, error)
 }
 
-// PaymentRepository is the database port for payments.
 type PaymentRepository interface {
 	Create(ctx context.Context, p *Payment) error
 	GetByID(ctx context.Context, id ID) (*Payment, error)
 	GetByProviderRef(ctx context.Context, provider, ref string) (*Payment, error)
+	GetLatestByOrderID(ctx context.Context, orderID ID) (*Payment, error)
 	UpdateStatus(ctx context.Context, p *Payment) error
 }
 
@@ -264,9 +264,7 @@ type WebhookRecord struct {
 	ReceivedAt      time.Time
 }
 
-// WebhookRepository handles the atomic transaction required when processing a webhook.
 type WebhookRepository interface {
 	IsProcessed(ctx context.Context, provider, eventID string) (bool, error)
-	// ProcessWebhookTx atomically saves the webhook event, updates the payment, updates the order (if not nil), and writes the outbox event (if not nil).
 	ProcessWebhookTx(ctx context.Context, webhook WebhookRecord, payment *Payment, order *Order, outbox *OutboxEvent) error
 }

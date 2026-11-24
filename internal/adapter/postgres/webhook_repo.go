@@ -13,10 +13,11 @@ import (
 
 type WebhookRepo struct {
 	pool *pgxpool.Pool
+	ids  domain.IDGenerator
 }
 
-func NewWebhookRepo(pool *pgxpool.Pool) *WebhookRepo {
-	return &WebhookRepo{pool: pool}
+func NewWebhookRepo(pool *pgxpool.Pool, ids domain.IDGenerator) *WebhookRepo {
+	return &WebhookRepo{pool: pool, ids: ids}
 }
 
 func (r *WebhookRepo) IsProcessed(ctx context.Context, provider, eventID string) (bool, error) {
@@ -38,7 +39,6 @@ func (r *WebhookRepo) ProcessWebhookTx(ctx context.Context, webhook domain.Webho
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	// 1. Insert into Webhook Inbox
 	_, err = tx.Exec(ctx, `
 INSERT INTO payment_webhook_events (
 id, provider, provider_event_id, signature_valid, raw_body, received_at
@@ -47,15 +47,13 @@ id, provider, provider_event_id, signature_valid, raw_body, received_at
 		webhook.SignatureValid, webhook.RawBody, webhook.ReceivedAt)
 
 	if err != nil {
-		// Catch unique constraint violation (duplicate webhook)
 		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" { // 23505 is unique_violation
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 			return domain.ErrConflict
 		}
 		return fmt.Errorf("insert webhook event: %w", err)
 	}
 
-	// 2. Update Payment (if provided)
 	if payment != nil {
 		_, err = tx.Exec(ctx, `
 UPDATE payments SET 
@@ -68,7 +66,6 @@ WHERE id = $1`,
 		}
 	}
 
-	// 3. Update Order & History (if provided)
 	if order != nil {
 		_, err = tx.Exec(ctx, `
 UPDATE orders SET status = $2, updated_at = $3 WHERE id = $1`,
@@ -89,9 +86,28 @@ VALUES ($1, $2, $3, $4, $5, $6)`,
 				return fmt.Errorf("insert order history: %w", err)
 			}
 		}
+
+		if order.Status() == domain.StatusCancelled {
+			for _, item := range order.Items() {
+				_, err = tx.Exec(ctx, `
+UPDATE inventory SET available = available + $2, updated_at = $3 
+WHERE product_id = $1`,
+					toUUID(item.ProductID), item.Quantity, order.UpdatedAt())
+				if err != nil {
+					return fmt.Errorf("release stock: %w", err)
+				}
+
+				_, err = tx.Exec(ctx, `
+INSERT INTO stock_movements (id, product_id, delta, reason, order_id, created_at)
+VALUES ($1, $2, $3, 'ORDER_RELEASE', $4, $5)`,
+					toUUID(r.ids.NewID()), toUUID(item.ProductID), item.Quantity, toUUID(order.ID()), order.UpdatedAt())
+				if err != nil {
+					return fmt.Errorf("insert stock movement: %w", err)
+				}
+			}
+		}
 	}
 
-	// 4. Insert Outbox Event (if provided)
 	if outbox != nil {
 		_, err = tx.Exec(ctx, `
 INSERT INTO outbox_events (event_id, aggregate_type, aggregate_id, event_type, payload, created_at)
@@ -103,7 +119,6 @@ VALUES ($1, $2, $3, $4, $5, $6)`,
 		}
 	}
 
-	// 5. Commit the atomic transaction
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("webhook tx commit: %w", err)
 	}

@@ -234,3 +234,32 @@ WHERE user_id = $1 ORDER BY created_at DESC LIMIT 100`, toUUID(userID))
 	}
 	return out, nil
 }
+
+func (r *OrderRepo) ListExpiredPending(ctx context.Context, before time.Time, limit int) ([]*domain.Order, error) {
+	rows, err := r.pool.Query(ctx, `
+SELECT id FROM orders 
+WHERE status = 'PENDING_PAYMENT' AND payment_expires_at < $1 
+ORDER BY created_at ASC LIMIT $2 FOR UPDATE SKIP LOCKED`, before, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list expired orders: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []domain.ID
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, fromUUID(id))
+	}
+
+	var out []*domain.Order
+	for _, id := range ids {
+		o, err := r.GetByID(ctx, id)
+		if err == nil {
+			out = append(out, o)
+		}
+	}
+	return out, nil
+}

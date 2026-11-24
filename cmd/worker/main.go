@@ -15,10 +15,13 @@ import (
 
 	"github.com/benkivuva/storefront-backend/internal/adapter/mailer"
 	"github.com/benkivuva/storefront-backend/internal/adapter/metrics"
+	"github.com/benkivuva/storefront-backend/internal/adapter/payments/mock"
 	"github.com/benkivuva/storefront-backend/internal/adapter/postgres"
 	adapterredis "github.com/benkivuva/storefront-backend/internal/adapter/redis"
 	"github.com/benkivuva/storefront-backend/internal/config"
 	"github.com/benkivuva/storefront-backend/internal/domain"
+	"github.com/benkivuva/storefront-backend/internal/pkg/clock"
+	"github.com/benkivuva/storefront-backend/internal/pkg/idgen"
 	"github.com/benkivuva/storefront-backend/internal/pkg/logging"
 	"github.com/benkivuva/storefront-backend/internal/service"
 )
@@ -32,7 +35,7 @@ func main() {
 
 func run() error {
 	if len(os.Args) < 2 {
-		return fmt.Errorf("usage: worker <relay|consumer-email|cleanup|replay>")
+		return fmt.Errorf("usage: worker <relay|consumer-email|cleanup|reaper|replay>")
 	}
 	role := os.Args[1]
 
@@ -76,6 +79,8 @@ func run() error {
 		err = runEmailConsumer(ctx, pool, rdb, sigCh)
 	case "cleanup":
 		err = runCleanup(ctx, pool)
+	case "reaper":
+		err = runReaper(ctx, pool)
 	case "replay":
 		err = runReplay(ctx, pool, rdb)
 	default:
@@ -204,4 +209,35 @@ func runReplay(ctx context.Context, pool *pgxpool.Pool, rdb *goredis.Client) err
 
 	slog.Info("replay complete", "events_replayed", count)
 	return nil
+}
+
+func runReaper(ctx context.Context, pool *pgxpool.Pool) error {
+	gen := idgen.New()
+	clk := clock.New()
+	prov := mock.NewProvider()
+
+	orderRepo := postgres.NewOrderRepo(pool, gen)
+	paymentRepo := postgres.NewPaymentRepo(pool)
+	webhookRepo := postgres.NewWebhookRepo(pool, gen)
+
+	svc := service.NewPaymentService(orderRepo, paymentRepo, prov, gen, clk)
+	svc.SetWebhookRepo(webhookRepo)
+
+	slog.Info("reaper started (running every 30 seconds)")
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			reaped, err := svc.ReapExpiredOrders(ctx)
+			if err != nil {
+				slog.Error("reaper failed", "error", err)
+			} else if reaped > 0 {
+				slog.Info("reaped expired orders", "count", reaped)
+			}
+		}
+	}
 }

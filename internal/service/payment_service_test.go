@@ -27,6 +27,9 @@ func (m *mockOrderRepo) UpdateStatus(ctx context.Context, o *domain.Order) error
 func (m *mockOrderRepo) ListByUser(ctx context.Context, userID domain.ID) ([]*domain.Order, error) {
 	return nil, nil
 }
+func (m *mockOrderRepo) ListExpiredPending(ctx context.Context, before time.Time, limit int) ([]*domain.Order, error) {
+	return nil, nil
+}
 
 type mockPaymentRepo struct {
 	created   *domain.Payment
@@ -50,6 +53,9 @@ func (m *mockPaymentRepo) GetByProviderRef(ctx context.Context, provider, ref st
 		return m.byRef, nil
 	}
 	return nil, domain.ErrNotFound
+}
+func (m *mockPaymentRepo) GetLatestByOrderID(ctx context.Context, orderID domain.ID) (*domain.Payment, error) {
+	return nil, nil
 }
 func (m *mockPaymentRepo) UpdateStatus(ctx context.Context, p *domain.Payment) error {
 	m.updated = p

@@ -14,7 +14,7 @@ import (
 func TestWebhookRepo_IsProcessed(t *testing.T) {
 	pool, _ := setupOutboxDB(t)
 	ctx := context.Background()
-	repo := postgres.NewWebhookRepo(pool)
+	repo := postgres.NewWebhookRepo(pool, idgen.New())
 
 	// 1. Should return false for unseen event
 	processed, err := repo.IsProcessed(ctx, "mock", "evt-never-seen")
@@ -29,8 +29,8 @@ func TestWebhookRepo_IsProcessed(t *testing.T) {
 func TestWebhookRepo_ProcessWebhookTx_AtomicSuccess(t *testing.T) {
 	pool, _ := setupOutboxDB(t)
 	ctx := context.Background()
-	repo := postgres.NewWebhookRepo(pool)
 	gen := idgen.New()
+	repo := postgres.NewWebhookRepo(pool, gen)
 
 	// Setup dependencies: User + Order + Payment
 	userID := gen.NewID()
@@ -122,8 +122,8 @@ func TestWebhookRepo_ProcessWebhookTx_AtomicSuccess(t *testing.T) {
 func TestWebhookRepo_DuplicateRejected(t *testing.T) {
 	pool, _ := setupOutboxDB(t)
 	ctx := context.Background()
-	repo := postgres.NewWebhookRepo(pool)
 	gen := idgen.New()
+	repo := postgres.NewWebhookRepo(pool, gen)
 
 	now := time.Now()
 	webhookRec := domain.WebhookRecord{
@@ -153,8 +153,8 @@ func TestWebhookRepo_DuplicateRejected(t *testing.T) {
 func TestWebhookRepo_InvalidSignatureStillRecorded(t *testing.T) {
 	pool, _ := setupOutboxDB(t)
 	ctx := context.Background()
-	repo := postgres.NewWebhookRepo(pool)
 	gen := idgen.New()
+	repo := postgres.NewWebhookRepo(pool, gen)
 
 	now := time.Now()
 	webhookRec := domain.WebhookRecord{
