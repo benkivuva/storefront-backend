@@ -13,7 +13,7 @@ import (
 )
 
 type PaymentService interface {
-	InitiatePayment(ctx context.Context, orderID domain.ID, method domain.PaymentMethod, customerPhone string) (domain.InitiateResult, error)
+	InitiatePayment(ctx context.Context, userID, orderID domain.ID, method domain.PaymentMethod, customerPhone string) (domain.InitiateResult, error)
 	ProcessWebhook(ctx context.Context, rawBody []byte, headers map[string]string) error
 }
 
@@ -26,7 +26,7 @@ func NewPaymentHandler(svc PaymentService) *PaymentHandler {
 }
 
 func (h *PaymentHandler) InitiatePayment(w http.ResponseWriter, r *http.Request) {
-	_, ok := middleware.UserFrom(r.Context())
+	u, ok := middleware.UserFrom(r.Context())
 	if !ok {
 		dto.WriteProblem(w, http.StatusUnauthorized, "UNAUTHORIZED", "authentication required")
 		return
@@ -44,7 +44,7 @@ func (h *PaymentHandler) InitiatePayment(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	res, err := h.svc.InitiatePayment(r.Context(), orderID, domain.PaymentMethod(req.Method), req.Phone)
+	res, err := h.svc.InitiatePayment(r.Context(), u.UserID, orderID, domain.PaymentMethod(req.Method), req.Phone)
 	if err != nil {
 		dto.WriteError(w, err)
 		return

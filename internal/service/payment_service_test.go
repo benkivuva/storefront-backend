@@ -143,7 +143,7 @@ func TestInitiatePayment_Success(t *testing.T) {
 
 	svc := service.NewPaymentService(orderRepo, paymentRepo, prov, idgen.New(), clk)
 
-	res, err := svc.InitiatePayment(context.Background(), order.ID(), domain.MethodCard, "")
+	res, err := svc.InitiatePayment(context.Background(), order.UserID(), order.ID(), domain.MethodCard, "")
 	if err != nil {
 		t.Fatalf("InitiatePayment: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestInitiatePayment_OrderNotFound(t *testing.T) {
 
 	svc := service.NewPaymentService(orderRepo, paymentRepo, prov, idgen.New(), clk)
 
-	_, err := svc.InitiatePayment(context.Background(), domain.ID{0xff}, domain.MethodCard, "")
+	_, err := svc.InitiatePayment(context.Background(), domain.ID{0xff}, domain.ID{0xff}, domain.MethodCard, "")
 	if err == nil {
 		t.Fatal("expected error for missing order")
 	}
@@ -185,7 +185,7 @@ func TestInitiatePayment_ProviderFails_MarksFailed(t *testing.T) {
 
 	svc := service.NewPaymentService(orderRepo, paymentRepo, prov, idgen.New(), clk)
 
-	_, err := svc.InitiatePayment(context.Background(), order.ID(), domain.MethodCard, "")
+	_, err := svc.InitiatePayment(context.Background(), order.UserID(), order.ID(), domain.MethodCard, "")
 	if err == nil {
 		t.Fatal("expected error when provider fails")
 	}

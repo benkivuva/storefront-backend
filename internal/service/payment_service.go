@@ -38,10 +38,15 @@ func (s *PaymentService) SetWebhookRepo(repo domain.WebhookRepository) {
 	s.webhookRepo = repo
 }
 
-func (s *PaymentService) InitiatePayment(ctx context.Context, orderID domain.ID, method domain.PaymentMethod, customerPhone string) (domain.InitiateResult, error) {
+func (s *PaymentService) InitiatePayment(ctx context.Context, userID, orderID domain.ID, method domain.PaymentMethod, customerPhone string) (domain.InitiateResult, error) {
 	order, err := s.orders.GetByID(ctx, orderID)
 	if err != nil {
 		return domain.InitiateResult{}, fmt.Errorf("fetch order: %w", err)
+	}
+
+	// SECURITY FIX: Verify ownership
+	if order.UserID() != userID {
+		return domain.InitiateResult{}, fmt.Errorf("%w: order does not belong to user", domain.ErrNotFound)
 	}
 
 	if order.Status() != domain.StatusPendingPayment {
@@ -90,6 +95,7 @@ func (s *PaymentService) InitiatePayment(ctx context.Context, orderID domain.ID,
 	return result, nil
 }
 
+// ProcessWebhook remains exactly as it was...
 func (s *PaymentService) ProcessWebhook(ctx context.Context, rawBody []byte, headers map[string]string) error {
 	evt, err := s.provider.VerifyWebhook(ctx, rawBody, headers)
 	if err != nil {
