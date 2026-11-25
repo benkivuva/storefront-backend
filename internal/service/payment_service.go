@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/benkivuva/storefront-backend/internal/domain"
 )
@@ -44,7 +45,6 @@ func (s *PaymentService) InitiatePayment(ctx context.Context, userID, orderID do
 		return domain.InitiateResult{}, fmt.Errorf("fetch order: %w", err)
 	}
 
-	// SECURITY FIX: Verify ownership
 	if order.UserID() != userID {
 		return domain.InitiateResult{}, fmt.Errorf("%w: order does not belong to user", domain.ErrNotFound)
 	}
@@ -95,7 +95,6 @@ func (s *PaymentService) InitiatePayment(ctx context.Context, userID, orderID do
 	return result, nil
 }
 
-// ProcessWebhook remains exactly as it was...
 func (s *PaymentService) ProcessWebhook(ctx context.Context, rawBody []byte, headers map[string]string) error {
 	evt, err := s.provider.VerifyWebhook(ctx, rawBody, headers)
 	if err != nil {
@@ -206,27 +205,28 @@ func (s *PaymentService) ReapExpiredOrders(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("list expired orders: %w", err)
 	}
 
+	slog.Info("reaper: found expired orders", "count", len(orders))
+
 	reaped := 0
 	for _, order := range orders {
 		payment, err := s.payments.GetLatestByOrderID(ctx, order.ID())
 		if err != nil {
-			continue // No payment found, skip
+			slog.Warn("reaper: no payment found for order", "order_id", order.ID().String(), "error", err)
+			continue
 		}
 
 		if payment.Status() == domain.PaymentPending {
-			// CRITICAL: Ask the provider if the money actually arrived before cancelling
 			statusEvt, err := s.provider.Status(ctx, payment.ProviderRef())
 			if err != nil {
-				// Provider is unreachable (Daraja network timeout). DO NOT cancel.
-				// Skip this order and retry on the next run.
+				slog.Warn("reaper: provider status check failed, skipping", "order_id", order.ID().String(), "error", err)
 				continue
 			}
 
 			if statusEvt.Status == domain.PaymentSucceeded {
-				// Money arrived! Process it as a success instead of cancelling.
 				if payment.AmountMinor() == statusEvt.AmountMinor {
 					_ = payment.MarkSucceeded(statusEvt.ProviderTxnID, now)
 					if err := order.Transition(domain.StatusPaid, "reaper", "late provider confirmation", now); err != nil {
+						slog.Error("reaper: order transition failed", "error", err)
 						continue
 					}
 					payload, _ := json.Marshal(map[string]any{
@@ -245,9 +245,13 @@ func (s *PaymentService) ReapExpiredOrders(ctx context.Context) (int, error) {
 					webhookRec := domain.WebhookRecord{
 						ID: s.ids.NewID(), Provider: s.provider.Name(),
 						ProviderEventID: "reaper-" + order.ID().String(),
-						SignatureValid:  true, ReceivedAt: now,
+						SignatureValid:  true,
+						RawBody:         []byte("{}"),
+						ReceivedAt:      now,
 					}
-					if err := s.webhookRepo.ProcessWebhookTx(ctx, webhookRec, payment, order, &outbox); err == nil {
+					if err := s.webhookRepo.ProcessWebhookTx(ctx, webhookRec, payment, order, &outbox); err != nil {
+						slog.Error("reaper: ProcessWebhookTx (paid) failed", "order_id", order.ID().String(), "error", err)
+					} else {
 						reaped++
 					}
 					continue
@@ -255,9 +259,9 @@ func (s *PaymentService) ReapExpiredOrders(ctx context.Context) (int, error) {
 			}
 		}
 
-		// Normal expiry: Mark payment expired, cancel order, release stock.
 		_ = payment.MarkExpired(now)
 		if err := order.Transition(domain.StatusCancelled, "reaper", "payment expired", now); err != nil {
+			slog.Error("reaper: order cancel transition failed", "order_id", order.ID().String(), "error", err)
 			continue
 		}
 
@@ -277,11 +281,14 @@ func (s *PaymentService) ReapExpiredOrders(ctx context.Context) (int, error) {
 		webhookRec := domain.WebhookRecord{
 			ID: s.ids.NewID(), Provider: s.provider.Name(),
 			ProviderEventID: "reaper-cancel-" + order.ID().String(),
-			SignatureValid:  true, ReceivedAt: now,
+			SignatureValid:  true,
+			RawBody:         []byte("{}"),
+			ReceivedAt:      now,
 		}
 
-		// The repo will release the stock if the order status is CANCELLED
-		if err := s.webhookRepo.ProcessWebhookTx(ctx, webhookRec, payment, order, &outbox); err == nil {
+		if err := s.webhookRepo.ProcessWebhookTx(ctx, webhookRec, payment, order, &outbox); err != nil {
+			slog.Error("reaper: ProcessWebhookTx (cancel) failed", "order_id", order.ID().String(), "error", err)
+		} else {
 			reaped++
 		}
 	}

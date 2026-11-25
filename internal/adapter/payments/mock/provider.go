@@ -26,12 +26,10 @@ func (p *Provider) Initiate(ctx context.Context, req domain.InitiateRequest) (do
 		return domain.InitiateResult{}, errors.New("mock: amount must be greater than zero")
 	}
 
-	// Simulate an STK push failure if the phone number ends in 000
 	if strings.HasSuffix(req.CustomerPhone, "000") {
 		return domain.InitiateResult{}, errors.New("mock: STK push failed, invalid phone number")
 	}
 
-	// Generate a fake provider reference
 	ref := fmt.Sprintf("mock-ref-%s", req.PaymentID.String())
 
 	return domain.InitiateResult{
@@ -58,24 +56,20 @@ func (p *Provider) VerifyWebhook(ctx context.Context, rawBody []byte, headers ma
 		return domain.WebhookEvent{}, fmt.Errorf("mock: invalid webhook payload: %w", err)
 	}
 
-	status := domain.PaymentStatus(payload.Status)
-
 	return domain.WebhookEvent{
 		ProviderEventID: payload.EventID,
 		ProviderRef:     payload.Ref,
-		Status:          status,
+		Status:          domain.PaymentStatus(payload.Status),
 		AmountMinor:     payload.Amount,
 		Currency:        payload.Currency,
 		ProviderTxnID:   payload.TxnID,
 		FailureReason:   payload.Failure,
 		RawPayload:      rawBody,
+		SignatureValid:  true,
 	}, nil
 }
 
 func (p *Provider) Status(ctx context.Context, providerRef string) (domain.WebhookEvent, error) {
-	// Simulate real-world provider states based on the reference string.
-	// This allows tests to explicitly test timeouts, failures, and successes.
-
 	if strings.Contains(providerRef, "timeout") {
 		return domain.WebhookEvent{}, errors.New("mock: provider API timeout (network error)")
 	}
@@ -97,7 +91,6 @@ func (p *Provider) Status(ctx context.Context, providerRef string) (domain.Webho
 		}, nil
 	}
 
-	// Default to success
 	return domain.WebhookEvent{
 		ProviderRef:   providerRef,
 		Status:        domain.PaymentSucceeded,

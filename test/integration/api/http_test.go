@@ -29,6 +29,7 @@ import (
 	httpsrv "github.com/benkivuva/storefront-backend/internal/adapter/http"
 	"github.com/benkivuva/storefront-backend/internal/adapter/http/handlers"
 	"github.com/benkivuva/storefront-backend/internal/adapter/http/middleware"
+	"github.com/benkivuva/storefront-backend/internal/adapter/payments/mock"
 	"github.com/benkivuva/storefront-backend/internal/adapter/postgres"
 	"github.com/benkivuva/storefront-backend/internal/adapter/postgres/migrate"
 	adapterredis "github.com/benkivuva/storefront-backend/internal/adapter/redis"
@@ -135,11 +136,12 @@ func runTests(m *testing.M) int {
 // ---------- per-test stack ----------
 
 type testServer struct {
-	URL   string
-	Srv   *httptest.Server
-	KS    *pkggjwt.KeySet
-	Pool  *pgxpool.Pool
-	Redis *goredis.Client
+	URL        string
+	Srv        *httptest.Server
+	KS         *pkggjwt.KeySet
+	Pool       *pgxpool.Pool
+	Redis      *goredis.Client
+	PaymentSvc *service.PaymentService
 }
 
 type serverOpts struct {
@@ -226,6 +228,17 @@ func newTestServer(t *testing.T, opts serverOpts) *testServer {
 	checkoutSvc := service.NewCheckoutService(cartRepo, productRepo, addressRepo, checkoutRepo, gen, clock.New())
 	checkoutH := handlers.NewCheckoutHandler(checkoutSvc)
 
+	orderRepo := postgres.NewOrderRepo(sharedPool, gen)
+	orderSvc := service.NewOrderService(orderRepo)
+	orderH := handlers.NewOrderHandler(orderSvc)
+
+	paymentRepo := postgres.NewPaymentRepo(sharedPool)
+	webhookRepo := postgres.NewWebhookRepo(sharedPool, gen)
+	mockProvider := mock.NewProvider()
+	paymentSvc := service.NewPaymentService(orderRepo, paymentRepo, mockProvider, gen, clock.New())
+	paymentSvc.SetWebhookRepo(webhookRepo)
+	paymentH := handlers.NewPaymentHandler(paymentSvc)
+
 	idemRepo := postgres.NewIdempotencyRepo(sharedPool)
 
 	router := httpsrv.NewPublicRouter(httpsrv.RouterConfig{
@@ -234,6 +247,8 @@ func newTestServer(t *testing.T, opts serverOpts) *testServer {
 		CatalogHandler:  catalogH,
 		CartHandler:     cartH,
 		CheckoutHandler: checkoutH,
+		OrderHandler:    orderH,
+		PaymentHandler:  paymentH,
 		IdempotencyRepo: idemRepo,
 		JWTVerifier:     middleware.NewJWTVerifier(sharedKS),
 		AuthLimiter:     opts.AuthLimiter,
@@ -249,12 +264,12 @@ func newTestServer(t *testing.T, opts serverOpts) *testServer {
 
 	srv := httptest.NewServer(router)
 	t.Cleanup(srv.Close)
-	return &testServer{URL: srv.URL, Srv: srv, KS: sharedKS, Pool: sharedPool, Redis: sharedRedis}
+	return &testServer{
+		URL: srv.URL, Srv: srv, KS: sharedKS, Pool: sharedPool,
+		Redis: sharedRedis, PaymentSvc: paymentSvc,
+	}
 }
 
-// bridgeLimiter adapts adapterredis.Limiter to middleware.RateLimiter.
-// Duplicated from main.go because main is package main; the alternative is
-// a shared bridge package. Duplication is 10 lines.
 type bridgeLimiter struct {
 	inner interface {
 		Allow(ctx context.Context, key string, cost int) (adapterredis.Decision, error)
@@ -309,7 +324,6 @@ func (d *httpDoer) do(method, path, body, jwt, origin, xff string) (*http.Respon
 	}
 	defer func() { _ = resp.Body.Close() }()
 	respBody, _ := io.ReadAll(resp.Body)
-	// Update jar from Set-Cookie
 	if setCookies := resp.Cookies(); len(setCookies) > 0 {
 		d.jar = mergeCookies(d.jar, setCookies)
 	}
@@ -358,7 +372,6 @@ var xffCounter int64
 func uniqueXFF(t *testing.T) string {
 	t.Helper()
 	n := atomic.AddInt64(&xffCounter, 1)
-	// Produce 10.<high>.<low>.1 so every test gets a unique /24 bucket
 	return fmt.Sprintf("10.%d.%d.1", (n>>8)&0xff, n&0xff)
 }
 
@@ -510,7 +523,6 @@ func TestHTTP_Login_DisabledAccount_401(t *testing.T) {
 	s := newTestServer(t, serverOpts{})
 	d, _, email := registerAndLogin(t, s)
 
-	// Deactivate the account directly in DB.
 	if _, err := s.Pool.Exec(context.Background(),
 		`UPDATE users SET is_active = FALSE WHERE email = $1`, email); err != nil {
 		t.Fatalf("deactivate: %v", err)
@@ -558,7 +570,6 @@ func TestHTTP_Me_WrongSignature_401(t *testing.T) {
 	s := newTestServer(t, serverOpts{})
 	d := newDoer(t, s)
 
-	// Sign with a different key than the server uses.
 	_, otherPriv, _ := ed25519.GenerateKey(nil)
 	otherKS, _ := pkggjwt.NewKeySet("kid-test", otherPriv, testIssuer, testAudience, nil)
 	fakeID := domain.ID{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
@@ -587,26 +598,21 @@ func TestHTTP_Refresh_HappyPath(t *testing.T) {
 	}
 }
 
-// THE critical test: replay an already-rotated refresh token. Family must
-// be revoked, and the legitimate successor token must also stop working.
 func TestHTTP_Refresh_ReplayRevokesFamily(t *testing.T) {
 	t.Parallel()
 	s := newTestServer(t, serverOpts{})
 	d, _, email := registerAndLogin(t, s)
 	xff := uniqueXFF(t)
 
-	// Snapshot cookie A (from login)
 	cookiesA := append([]*http.Cookie(nil), d.jar...)
 	if len(cookiesA) == 0 {
 		t.Fatal("no cookies from login")
 	}
 
-	// Rotate: A -> B
 	resp, respBody := d.do("POST", "/api/v1/auth/refresh", "", "", testOrigin, xff)
 	expectStatus(t, resp, http.StatusOK, respBody)
 	cookiesB := append([]*http.Cookie(nil), d.jar...)
 
-	// Query family_id from DB via email lookup
 	var userID domain.ID
 	var familyID string
 	err := s.Pool.QueryRow(context.Background(),
@@ -621,7 +627,6 @@ func TestHTTP_Refresh_ReplayRevokesFamily(t *testing.T) {
 		t.Fatalf("find family: %v", err)
 	}
 
-	// Replay A: attacker presents the old cookie after legitimate rotation.
 	dA := newDoer(t, s)
 	dA.jar = cookiesA
 	resp, respBody = dA.do("POST", "/api/v1/auth/refresh", "", "", testOrigin, xff)
@@ -630,7 +635,6 @@ func TestHTTP_Refresh_ReplayRevokesFamily(t *testing.T) {
 		t.Errorf("code = %v, want TOKEN_REUSED", decodeProblem(t, respBody)["code"])
 	}
 
-	// Now B (the legitimate successor) must also fail — the whole family was revoked.
 	dB := newDoer(t, s)
 	dB.jar = cookiesB
 	resp, respBody = dB.do("POST", "/api/v1/auth/refresh", "", "", testOrigin, xff)
@@ -639,7 +643,6 @@ func TestHTTP_Refresh_ReplayRevokesFamily(t *testing.T) {
 		t.Errorf("successor code = %v, want TOKEN_REUSED", decodeProblem(t, respBody)["code"])
 	}
 
-	// DB check: every token in the family has revoked_at set.
 	var activeCount int
 	err = s.Pool.QueryRow(context.Background(),
 		`SELECT count(*) FROM refresh_tokens
@@ -652,7 +655,6 @@ func TestHTTP_Refresh_ReplayRevokesFamily(t *testing.T) {
 		t.Fatalf("active tokens in family = %d, want 0", activeCount)
 	}
 
-	// Audit check: refresh_reuse_detected logged.
 	var auditCount int
 	_ = s.Pool.QueryRow(context.Background(),
 		`SELECT count(*) FROM audit_log
@@ -682,7 +684,6 @@ func TestHTTP_Logout_ThenRefresh_Fails(t *testing.T) {
 	resp, _ := d.do("POST", "/api/v1/auth/logout", "", "", testOrigin, xff)
 	expectStatus(t, resp, http.StatusNoContent, nil)
 
-	// Cookie should have been cleared, jar should have no refresh_token
 	for _, c := range d.jar {
 		if c.Name == "refresh_token" {
 			t.Fatalf("refresh_token cookie still present after logout")
@@ -703,15 +704,13 @@ func TestHTTP_AuthRateLimit_429(t *testing.T) {
 		AuthCapacity: 2,
 	})
 	d := newDoer(t, s)
-	xff := uniqueXFF(t) // bucket is anon:<xff-prefix>
+	xff := uniqueXFF(t)
 
-	// Two login attempts allowed (will fail auth but consume quota).
 	for i := 0; i < 2; i++ {
 		d.do("POST", "/api/v1/auth/login",
 			fmt.Sprintf(`{"email":%q,"password":"x"}`, uniqueEmail(t)), "", "", xff)
 	}
 
-	// Third should be rate limited.
 	resp, respBody := d.do("POST", "/api/v1/auth/login",
 		fmt.Sprintf(`{"email":%q,"password":"x"}`, uniqueEmail(t)), "", "", xff)
 	expectStatus(t, resp, http.StatusTooManyRequests, respBody)
@@ -738,7 +737,6 @@ func TestHTTP_RedisDown_NoFallback_503(t *testing.T) {
 	s := newTestServer(t, serverOpts{
 		AuthLimiter:  &bridgeLimiter{inner: deadLimiter},
 		AuthCapacity: 5,
-		// No fallback → 503
 	})
 	d := newDoer(t, s)
 
@@ -769,7 +767,6 @@ func TestHTTP_RedisDown_WithFallback_EnforcesLimit(t *testing.T) {
 	d := newDoer(t, s)
 	xff := uniqueXFF(t)
 
-	// Two allowed by memory fallback.
 	for i := 0; i < 2; i++ {
 		resp, _ := d.do("POST", "/api/v1/auth/login",
 			fmt.Sprintf(`{"email":%q,"password":"x"}`, uniqueEmail(t)), "", "", xff)
@@ -778,7 +775,6 @@ func TestHTTP_RedisDown_WithFallback_EnforcesLimit(t *testing.T) {
 		}
 	}
 
-	// Third must be rate-limited by memory fallback.
 	resp, respBody := d.do("POST", "/api/v1/auth/login",
 		fmt.Sprintf(`{"email":%q,"password":"x"}`, uniqueEmail(t)), "", "", xff)
 	expectStatus(t, resp, http.StatusTooManyRequests, respBody)
@@ -842,7 +838,6 @@ func TestHTTP_BodyLimit_AuthEndpoint_413(t *testing.T) {
 	s := newTestServer(t, serverOpts{})
 	d := newDoer(t, s)
 
-	// 100KB body exceeds the 64KB auth limit.
 	bigName := strings.Repeat("a", authBodyLimit+100)
 	body := fmt.Sprintf(`{"email":%q,"password":%q,"name":%q}`, uniqueEmail(t), testPassword, bigName)
 	resp, respBody := d.do("POST", "/api/v1/auth/register", body, "", "", uniqueXFF(t))
@@ -965,7 +960,6 @@ func TestHTTP_Refresh_Concurrent(t *testing.T) {
 	d, _, _ := registerAndLogin(t, s)
 	xff := uniqueXFF(t)
 
-	// Snapshot the cookie from login
 	cookies := append([]*http.Cookie(nil), d.jar...)
 
 	var wg sync.WaitGroup
@@ -978,7 +972,6 @@ func TestHTTP_Refresh_Concurrent(t *testing.T) {
 		go func(idx int) {
 			defer wg.Done()
 			gd := newDoer(t, s)
-			// Deep-copy each cookie so goroutines don't share memory.
 			gd.jar = make([]*http.Cookie, len(cookies))
 			for j, c := range cookies {
 				cc := *c
@@ -1013,23 +1006,18 @@ func TestHTTP_Lockout_EndToEnd(t *testing.T) {
 	d, _, email := registerAndLogin(t, s)
 	xff := uniqueXFF(t)
 
-	// The test server lockout schedule is MinFailures: 3, Wait: 100ms.
-	// 3 wrong passwords.
 	for i := 0; i < 3; i++ {
 		d.do("POST", "/api/v1/auth/login", fmt.Sprintf(`{"email":%q,"password":"wrong"}`, email), "", "", xff)
 	}
 
-	// Correct password while locked should fail.
 	resp, respBody := d.do("POST", "/api/v1/auth/login", fmt.Sprintf(`{"email":%q,"password":%q}`, email, testPassword), "", "", xff)
 	expectStatus(t, resp, http.StatusUnauthorized, respBody)
 	if decodeProblem(t, respBody)["code"] != "INVALID_CREDENTIALS" {
 		t.Errorf("expected INVALID_CREDENTIALS during lockout, got %v", decodeProblem(t, respBody)["code"])
 	}
 
-	// Wait for the lockout to expire (200ms to avoid flakes).
 	time.Sleep(5500 * time.Millisecond)
 
-	// Correct password now should succeed.
 	resp, respBody = d.do("POST", "/api/v1/auth/login", fmt.Sprintf(`{"email":%q,"password":%q}`, email, testPassword), "", "", xff)
 	expectStatus(t, resp, http.StatusOK, respBody)
 }
@@ -1040,19 +1028,15 @@ func TestHTTP_Logout_ServerSideReplay(t *testing.T) {
 	d, _, _ := registerAndLogin(t, s)
 	xff := uniqueXFF(t)
 
-	// Snapshot cookie
 	cookies := append([]*http.Cookie(nil), d.jar...)
 
-	// Logout
 	resp, _ := d.do("POST", "/api/v1/auth/logout", "", "", testOrigin, xff)
 	expectStatus(t, resp, http.StatusNoContent, nil)
 
-	// Attacker replays the old cookie.
 	ad := newDoer(t, s)
 	ad.jar = cookies
 	resp, respBody := ad.do("POST", "/api/v1/auth/refresh", "", "", testOrigin, xff)
 
-	// Must be 401 (family revoked).
 	expectStatus(t, resp, http.StatusUnauthorized, respBody)
 }
 
@@ -1151,17 +1135,14 @@ func TestHTTP_JWT_TamperedPayload(t *testing.T) {
 	s := newTestServer(t, serverOpts{})
 	d := newDoer(t, s)
 
-	// 1. Get a valid token
 	fakeID := domain.ID{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10}
 	raw, _ := sharedKS.Sign(fakeID.String(), string(domain.RoleCustomer), time.Hour)
 
-	// 2. Tamper with the payload (change customer to admin)
 	parts := strings.Split(raw, ".")
 	if len(parts) != 3 {
 		t.Fatal("invalid token format")
 	}
 
-	// Decode payload, change role, re-encode
 	payloadBytes, _ := base64.RawURLEncoding.DecodeString(parts[1])
 	var claims map[string]any
 	_ = json.Unmarshal(payloadBytes, &claims)
@@ -1169,10 +1150,287 @@ func TestHTTP_JWT_TamperedPayload(t *testing.T) {
 	newPayloadBytes, _ := json.Marshal(claims)
 	parts[1] = base64.RawURLEncoding.EncodeToString(newPayloadBytes)
 
-	// 3. Reassemble (keeping the original signature)
 	tamperedToken := strings.Join(parts, ".")
 
-	// 4. Send the tampered token
 	resp, _ := d.do("GET", "/api/v1/me", "", tamperedToken, "", uniqueXFF(t))
 	expectStatus(t, resp, http.StatusUnauthorized, nil)
+}
+
+// ---------- Payment E2E ----------
+
+func TestHTTP_Payment_E2E_HappyPath(t *testing.T) {
+	t.Parallel()
+	s := newTestServer(t, serverOpts{})
+
+	// 1. Admin: create product with stock
+	adminEmail := uniqueEmail(t)
+	adminXFF := uniqueXFF(t)
+	adminD := newDoer(t, s)
+	adminD.do("POST", "/api/v1/auth/register", fmt.Sprintf(`{"email":%q,"password":%q,"name":"Admin"}`, adminEmail, testPassword), "", "", adminXFF)
+	_, _ = s.Pool.Exec(context.Background(), `UPDATE users SET role = 'admin' WHERE email = $1`, adminEmail)
+
+	resp, loginBody := adminD.do("POST", "/api/v1/auth/login", fmt.Sprintf(`{"email":%q,"password":%q}`, adminEmail, testPassword), "", "", adminXFF)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin login: %d", resp.StatusCode)
+	}
+	var adminLogin struct {
+		AccessToken string `json:"access_token"`
+	}
+	_ = json.Unmarshal(loginBody, &adminLogin)
+
+	sku := "PAY-" + uniqueXFF(t)
+	createBody := fmt.Sprintf(`{"sku":%q,"name":"Payment Item","price_minor":10000,"tax_class":"STANDARD_16"}`, sku)
+	req := httptest.NewRequest("POST", s.URL+"/api/v1/admin/products", strings.NewReader(createBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+adminLogin.AccessToken)
+	req.Header.Set("X-Forwarded-For", adminXFF)
+	rec := httptest.NewRecorder()
+	s.Srv.Config.Handler.ServeHTTP(rec, req)
+
+	var product struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &product)
+
+	stockBody := `{"delta":10,"reason":"RESTOCK"}`
+	req = httptest.NewRequest("POST", s.URL+"/api/v1/admin/products/"+product.ID+"/inventory", strings.NewReader(stockBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+adminLogin.AccessToken)
+	req.Header.Set("X-Forwarded-For", adminXFF)
+	s.Srv.Config.Handler.ServeHTTP(httptest.NewRecorder(), req)
+
+	// 2. Customer: register, login, add address, add to cart, checkout
+	custEmail := uniqueEmail(t)
+	custXFF := uniqueXFF(t)
+	custD := newDoer(t, s)
+	custD.do("POST", "/api/v1/auth/register", fmt.Sprintf(`{"email":%q,"password":%q,"name":"Cust"}`, custEmail, testPassword), "", "", custXFF)
+	_, custLoginBody := custD.do("POST", "/api/v1/auth/login", fmt.Sprintf(`{"email":%q,"password":%q}`, custEmail, testPassword), "", "", custXFF)
+	var custLogin struct {
+		AccessToken string `json:"access_token"`
+	}
+	_ = json.Unmarshal(custLoginBody, &custLogin)
+
+	_, addrBody := custD.do("POST", "/api/v1/me/addresses", `{"recipient":"Cust","phone":"+254712345678","line1":"1 St","town":"Nairobi"}`, custLogin.AccessToken, "", custXFF)
+	var addr struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(addrBody, &addr)
+
+	custD.do("POST", "/api/v1/cart/items", fmt.Sprintf(`{"product_id":%q,"quantity":1}`, product.ID), custLogin.AccessToken, "", custXFF)
+
+	checkoutBody := fmt.Sprintf(`{"address_id":%q,"expected_total_minor":60000}`, addr.ID)
+	req = httptest.NewRequest("POST", s.URL+"/api/v1/checkout", strings.NewReader(checkoutBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+custLogin.AccessToken)
+	req.Header.Set("Idempotency-Key", "happy-"+uniqueXFF(t))
+	req.Header.Set("X-Forwarded-For", custXFF)
+	rec = httptest.NewRecorder()
+	s.Srv.Config.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("checkout: %d body=%s", rec.Code, rec.Body.String())
+	}
+	var checkoutResp struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &checkoutResp)
+
+	// 3. Initiate payment
+	payBody := `{"method":"card"}`
+	req = httptest.NewRequest("POST", s.URL+"/api/v1/orders/"+checkoutResp.ID+"/payments", strings.NewReader(payBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+custLogin.AccessToken)
+	req.Header.Set("Idempotency-Key", "pay-"+uniqueXFF(t))
+	req.Header.Set("X-Forwarded-For", custXFF)
+	rec = httptest.NewRecorder()
+	s.Srv.Config.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("payment initiation: %d body=%s", rec.Code, rec.Body.String())
+	}
+	var payResp struct {
+		PaymentID string `json:"payment_id"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &payResp)
+	providerRef := payResp.PaymentID
+
+	// 4. Fire webhook (simulating provider callback)
+	evtID := "evt-happy-" + uniqueXFF(t)
+	webhookBody := fmt.Sprintf(`{
+"event_id": %q,
+"reference": %q,
+"status": "SUCCEEDED",
+"amount_minor": 60000,
+"currency": "KES",
+"transaction_id": "txn-happy-1"
+}`, evtID, providerRef)
+
+	req = httptest.NewRequest("POST", s.URL+"/api/v1/webhooks/mock", strings.NewReader(webhookBody))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	s.Srv.Config.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("webhook: %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	// 5. Verify DB state: Order is PAID, Payment is SUCCEEDED
+	ctx := context.Background()
+	var orderStatus string
+	_ = s.Pool.QueryRow(ctx, `SELECT status FROM orders WHERE id = $1`, checkoutResp.ID).Scan(&orderStatus)
+	if orderStatus != "PAID" {
+		t.Errorf("expected PAID, got %s", orderStatus)
+	}
+
+	var payStatus string
+	_ = s.Pool.QueryRow(ctx, `SELECT status FROM payments WHERE order_id = $1`, checkoutResp.ID).Scan(&payStatus)
+	if payStatus != "SUCCEEDED" {
+		t.Errorf("expected SUCCEEDED, got %s", payStatus)
+	}
+
+	// 6. Verify outbox has OrderPaid
+	var outboxCount int
+	_ = s.Pool.QueryRow(ctx, `SELECT count(*) FROM outbox_events WHERE event_type = 'OrderPaid' AND aggregate_id = $1`, checkoutResp.ID).Scan(&outboxCount)
+	if outboxCount != 1 {
+		t.Errorf("expected 1 OrderPaid outbox event, got %d", outboxCount)
+	}
+}
+
+func TestHTTP_Payment_E2E_Reaper(t *testing.T) {
+	t.Parallel()
+	s := newTestServer(t, serverOpts{})
+
+	adminEmail := uniqueEmail(t)
+	adminXFF := uniqueXFF(t)
+	adminD := newDoer(t, s)
+	adminD.do("POST", "/api/v1/auth/register", fmt.Sprintf(`{"email":%q,"password":%q,"name":"Admin"}`, adminEmail, testPassword), "", "", adminXFF)
+	_, _ = s.Pool.Exec(context.Background(), `UPDATE users SET role = 'admin' WHERE email = $1`, adminEmail)
+
+	resp, loginBody := adminD.do("POST", "/api/v1/auth/login", fmt.Sprintf(`{"email":%q,"password":%q}`, adminEmail, testPassword), "", "", adminXFF)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin login: %d", resp.StatusCode)
+	}
+	var adminLogin struct {
+		AccessToken string `json:"access_token"`
+	}
+	_ = json.Unmarshal(loginBody, &adminLogin)
+
+	sku := "REAP-" + uniqueXFF(t)
+	createBody := fmt.Sprintf(`{"sku":%q,"name":"Reap Item","price_minor":10000,"tax_class":"STANDARD_16"}`, sku)
+	req := httptest.NewRequest("POST", s.URL+"/api/v1/admin/products", strings.NewReader(createBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+adminLogin.AccessToken)
+	req.Header.Set("X-Forwarded-For", adminXFF)
+	rec := httptest.NewRecorder()
+	s.Srv.Config.Handler.ServeHTTP(rec, req)
+	var product struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &product)
+
+	stockBody := `{"delta":10,"reason":"RESTOCK"}`
+	req = httptest.NewRequest("POST", s.URL+"/api/v1/admin/products/"+product.ID+"/inventory", strings.NewReader(stockBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+adminLogin.AccessToken)
+	req.Header.Set("X-Forwarded-For", adminXFF)
+	s.Srv.Config.Handler.ServeHTTP(httptest.NewRecorder(), req)
+
+	custEmail := uniqueEmail(t)
+	custXFF := uniqueXFF(t)
+	custD := newDoer(t, s)
+	custD.do("POST", "/api/v1/auth/register", fmt.Sprintf(`{"email":%q,"password":%q,"name":"Cust"}`, custEmail, testPassword), "", "", custXFF)
+	_, custLoginBody := custD.do("POST", "/api/v1/auth/login", fmt.Sprintf(`{"email":%q,"password":%q}`, custEmail, testPassword), "", "", custXFF)
+	var custLogin struct {
+		AccessToken string `json:"access_token"`
+	}
+	_ = json.Unmarshal(custLoginBody, &custLogin)
+
+	_, addrBody := custD.do("POST", "/api/v1/me/addresses", `{"recipient":"Cust","phone":"+254712345678","line1":"1 St","town":"Nairobi"}`, custLogin.AccessToken, "", custXFF)
+	var addr struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(addrBody, &addr)
+
+	custD.do("POST", "/api/v1/cart/items", fmt.Sprintf(`{"product_id":%q,"quantity":1}`, product.ID), custLogin.AccessToken, "", custXFF)
+
+	checkoutBody := fmt.Sprintf(`{"address_id":%q,"expected_total_minor":60000}`, addr.ID)
+	req = httptest.NewRequest("POST", s.URL+"/api/v1/checkout", strings.NewReader(checkoutBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+custLogin.AccessToken)
+	req.Header.Set("Idempotency-Key", "reap-"+uniqueXFF(t))
+	req.Header.Set("X-Forwarded-For", custXFF)
+	rec = httptest.NewRecorder()
+	s.Srv.Config.Handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("checkout: %d body=%s", rec.Code, rec.Body.String())
+	}
+	var checkoutResp struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &checkoutResp)
+
+	payBody := `{"method":"card"}`
+	req = httptest.NewRequest("POST", s.URL+"/api/v1/orders/"+checkoutResp.ID+"/payments", strings.NewReader(payBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+custLogin.AccessToken)
+	req.Header.Set("Idempotency-Key", "reap-pay-"+uniqueXFF(t))
+	req.Header.Set("X-Forwarded-For", custXFF)
+	rec = httptest.NewRecorder()
+	s.Srv.Config.Handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("payment initiation: %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	ctx := context.Background()
+
+	// Use Go time explicitly (avoids timezone/precision mismatch with DB now())
+	pastTime := time.Now().Add(-1 * time.Hour)
+	tag, err := s.Pool.Exec(ctx, `UPDATE orders SET payment_expires_at = $1 WHERE id = $2`, pastTime, checkoutResp.ID)
+	if err != nil {
+		t.Fatalf("update expiry: %v", err)
+	}
+	if tag.RowsAffected() != 1 {
+		t.Fatalf("update expiry: expected 1 row, got %d", tag.RowsAffected())
+	}
+
+	// Explicit ::text cast (UUID cannot concatenate reliably to text)
+	tag, err = s.Pool.Exec(ctx, `UPDATE payments SET provider_ref = 'fail-ref-' || id::text WHERE order_id = $1`, checkoutResp.ID)
+	if err != nil {
+		t.Fatalf("update provider ref: %v", err)
+	}
+	if tag.RowsAffected() != 1 {
+		t.Fatalf("update provider ref: expected 1 row, got %d", tag.RowsAffected())
+	}
+
+	reaped, err := s.PaymentSvc.ReapExpiredOrders(ctx)
+	if err != nil {
+		t.Fatalf("reap: %v", err)
+	}
+	if reaped != 1 {
+		t.Errorf("expected 1 reaped order, got %d", reaped)
+	}
+
+	var orderStatus string
+	_ = s.Pool.QueryRow(ctx, `SELECT status FROM orders WHERE id = $1`, checkoutResp.ID).Scan(&orderStatus)
+	if orderStatus != "CANCELLED" {
+		t.Errorf("expected CANCELLED, got %s", orderStatus)
+	}
+
+	var payStatus string
+	_ = s.Pool.QueryRow(ctx, `SELECT status FROM payments WHERE order_id = $1`, checkoutResp.ID).Scan(&payStatus)
+	if payStatus != "EXPIRED" {
+		t.Errorf("expected EXPIRED, got %s", payStatus)
+	}
+
+	var available int
+	_ = s.Pool.QueryRow(ctx, `SELECT available FROM inventory WHERE product_id = $1`, product.ID).Scan(&available)
+	if available != 10 {
+		t.Errorf("expected stock 10, got %d", available)
+	}
+
+	var releaseCount int
+	_ = s.Pool.QueryRow(ctx, `SELECT count(*) FROM stock_movements WHERE order_id = $1 AND reason = 'ORDER_RELEASE'`, checkoutResp.ID).Scan(&releaseCount)
+	if releaseCount != 1 {
+		t.Errorf("expected 1 ORDER_RELEASE movement, got %d", releaseCount)
+	}
 }
