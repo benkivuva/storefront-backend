@@ -229,7 +229,7 @@ func newTestServer(t *testing.T, opts serverOpts) *testServer {
 	checkoutH := handlers.NewCheckoutHandler(checkoutSvc)
 
 	orderRepo := postgres.NewOrderRepo(sharedPool, gen)
-	orderSvc := service.NewOrderService(orderRepo)
+	orderSvc := service.NewOrderService(orderRepo, clock.New())
 	orderH := handlers.NewOrderHandler(orderSvc)
 
 	paymentRepo := postgres.NewPaymentRepo(sharedPool)
@@ -1249,10 +1249,14 @@ func TestHTTP_Payment_E2E_HappyPath(t *testing.T) {
 		t.Fatalf("payment initiation: %d body=%s", rec.Code, rec.Body.String())
 	}
 	var payResp struct {
-		PaymentID string `json:"payment_id"`
+		PaymentID         string `json:"payment_id"`
+		ProviderReference string `json:"provider_reference"`
 	}
 	_ = json.Unmarshal(rec.Body.Bytes(), &payResp)
-	providerRef := payResp.PaymentID
+	if payResp.PaymentID == "" || payResp.ProviderReference == "" {
+		t.Fatalf("payment response missing ids: %s", rec.Body.String())
+	}
+	providerRef := payResp.ProviderReference
 
 	// 4. Fire webhook (simulating provider callback)
 	evtID := "evt-happy-" + uniqueXFF(t)
@@ -1432,5 +1436,54 @@ func TestHTTP_Payment_E2E_Reaper(t *testing.T) {
 	_ = s.Pool.QueryRow(ctx, `SELECT count(*) FROM stock_movements WHERE order_id = $1 AND reason = 'ORDER_RELEASE'`, checkoutResp.ID).Scan(&releaseCount)
 	if releaseCount != 1 {
 		t.Errorf("expected 1 ORDER_RELEASE movement, got %d", releaseCount)
+	}
+
+	// A provider callback that arrives after expiry must not resurrect the
+	// order: the payment is quarantined as ORPHANED for finance reconciliation.
+	var lateRef string
+	if err := s.Pool.QueryRow(ctx, `SELECT provider_ref FROM payments WHERE order_id = $1`, checkoutResp.ID).Scan(&lateRef); err != nil {
+		t.Fatalf("read provider ref: %v", err)
+	}
+	lateBody := fmt.Sprintf(`{
+"event_id": %q,
+"reference": %q,
+"status": "SUCCEEDED",
+"amount_minor": 60000,
+"currency": "KES",
+"transaction_id": "txn-late-1"
+}`, "evt-late-"+uniqueXFF(t), lateRef)
+
+	req = httptest.NewRequest("POST", s.URL+"/api/v1/webhooks/mock", strings.NewReader(lateBody))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	s.Srv.Config.Handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("late webhook: %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	if err := s.Pool.QueryRow(ctx, `SELECT status FROM payments WHERE order_id = $1`, checkoutResp.ID).Scan(&payStatus); err != nil {
+		t.Fatalf("read payment status: %v", err)
+	}
+	if payStatus != "ORPHANED" {
+		t.Errorf("expected ORPHANED after late callback, got %s", payStatus)
+	}
+
+	var orphanedEvents int
+	_ = s.Pool.QueryRow(ctx, `SELECT count(*) FROM outbox_events WHERE event_type = 'PaymentOrphaned' AND aggregate_id = (SELECT id FROM payments WHERE order_id = $1)`, checkoutResp.ID).Scan(&orphanedEvents)
+	if orphanedEvents != 1 {
+		t.Errorf("expected 1 PaymentOrphaned outbox event, got %d", orphanedEvents)
+	}
+
+	// The admin reconciliation queue surfaces the orphan.
+	req = httptest.NewRequest("GET", s.URL+"/api/v1/admin/payments/orphaned", nil)
+	req.Header.Set("Authorization", "Bearer "+adminLogin.AccessToken)
+	req.Header.Set("X-Forwarded-For", adminXFF)
+	rec = httptest.NewRecorder()
+	s.Srv.Config.Handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("orphaned queue: %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "ORPHANED") {
+		t.Errorf("orphaned queue did not include the payment: %s", rec.Body.String())
 	}
 }

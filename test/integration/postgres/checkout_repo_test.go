@@ -2,6 +2,8 @@ package postgres_test
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -76,6 +78,17 @@ func TestCheckoutRepo(t *testing.T) {
 		t.Fatalf("expected CONVERTED, got %s", cartStatus)
 	}
 
+	// The stock ledger must reconcile with the authoritative inventory row.
+	var ledgerDelta int
+	_ = pool.QueryRow(ctx, `SELECT COALESCE(SUM(delta), 0) FROM stock_movements WHERE product_id = $1`, [16]byte(prodID)).Scan(&ledgerDelta)
+	if ledgerDelta != -2 {
+		t.Fatalf("expected ledger delta -2, got %d", ledgerDelta)
+	}
+
+	if order.OrderNumber() == 0 {
+		t.Fatalf("expected order_number to be populated from the sequence")
+	}
+
 	var orderCount int
 	_ = pool.QueryRow(ctx, `SELECT count(*) FROM orders WHERE id = $1`, [16]byte(order.ID())).Scan(&orderCount)
 	if orderCount != 1 {
@@ -109,5 +122,63 @@ func TestCheckoutRepo(t *testing.T) {
 	_ = pool.QueryRow(ctx, `SELECT available FROM inventory WHERE product_id = $1`, [16]byte(prodID)).Scan(&available)
 	if available != 8 {
 		t.Fatalf("stock was modified despite rollback, got %d", available)
+	}
+
+	// 3. Two concurrent multi-SKU checkouts that list the same products in
+	// opposite order. Rows are locked in sorted product-id order, so neither
+	// transaction may deadlock (SQLSTATE 40P01) or lose an update.
+	prodA := idgen.New().NewID()
+	prodB := idgen.New().NewID()
+	_, _ = pool.Exec(ctx, `INSERT INTO products (id, sku, name, price_minor, currency, tax_class) VALUES ($1, 'LOCK-A', 'A', 1000, 'KES', 'STANDARD_16'), ($2, 'LOCK-B', 'B', 1000, 'KES', 'STANDARD_16')`, [16]byte(prodA), [16]byte(prodB))
+	_, _ = pool.Exec(ctx, `INSERT INTO inventory (product_id, available) VALUES ($1, 10), ($2, 10)`, [16]byte(prodA), [16]byte(prodB))
+
+	mkItem := func(id domain.ID, sku string) domain.OrderItemSnapshot {
+		return domain.OrderItemSnapshot{
+			ProductID: id, SKU: sku, ProductName: sku, Quantity: 1,
+			UnitPrice: price, TaxClass: domain.TaxStandard16, TaxRateBp: 1600,
+			LineVat: vat, LineGrossMinor: 1000,
+		}
+	}
+	itemA, itemB := mkItem(prodA, "LOCK-A"), mkItem(prodB, "LOCK-B")
+
+	orders := [][]domain.OrderItemSnapshot{{itemA, itemB}, {itemB, itemA}}
+	owners := []domain.ID{idgen.New().NewID(), idgen.New().NewID()}
+	carts := []domain.ID{idgen.New().NewID(), idgen.New().NewID()}
+	for i, c := range carts {
+		if _, err := pool.Exec(ctx, `INSERT INTO users (id, email, password_hash) VALUES ($1, $2, 'h')`, [16]byte(owners[i]), fmt.Sprintf("lock-%d@example.com", i)); err != nil {
+			t.Fatalf("insert user %d: %v", i, err)
+		}
+		if _, err := pool.Exec(ctx, `INSERT INTO carts (id, user_id, status) VALUES ($1, $2, 'ACTIVE')`, [16]byte(c), [16]byte(owners[i])); err != nil {
+			t.Fatalf("insert cart %d: %v", i, err)
+		}
+	}
+
+	var wg sync.WaitGroup
+	errs := make([]error, len(orders))
+	for i := range orders {
+		o, err := domain.NewOrder(idgen.New().NewID(), owners[i], addrID, orders[i], price, now, now.Add(15*time.Minute))
+		if err != nil {
+			t.Fatalf("build order %d: %v", i, err)
+		}
+		wg.Add(1)
+		go func(i int, o *domain.Order) {
+			defer wg.Done()
+			errs[i] = repo.Execute(ctx, carts[i], o, fmt.Sprintf("idem-lock-%d-%s", i, idgen.New().NewID()))
+		}(i, o)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent checkout %d failed: %v", i, err)
+		}
+	}
+	for _, id := range []domain.ID{prodA, prodB} {
+		if err := pool.QueryRow(ctx, `SELECT available FROM inventory WHERE product_id = $1`, [16]byte(id)).Scan(&available); err != nil {
+			t.Fatalf("read stock: %v", err)
+		}
+		if available != 8 {
+			t.Fatalf("expected stock 8 after two reservations, got %d", available)
+		}
 	}
 }

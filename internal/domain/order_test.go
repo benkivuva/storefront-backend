@@ -54,6 +54,48 @@ func TestOrder_CreationAndTotals(t *testing.T) {
 	}
 }
 
+func TestOrder_ZeroRatedAndExemptLines(t *testing.T) {
+	now := time.Now().UTC()
+	price, _ := New(5000, KES)
+	zero, _ := Zero(KES)
+
+	for _, tc := range []struct {
+		class TaxClass
+		rate  int
+	}{
+		{TaxZeroRated, 0},
+		{TaxExempt, 0},
+	} {
+		t.Run(string(tc.class), func(t *testing.T) {
+			item := OrderItemSnapshot{
+				ProductID:      mustID(t, "44444444-4444-7444-8444-444444444444"),
+				SKU:            "ZERO1",
+				ProductName:    "Zero-rated item",
+				Quantity:       3,
+				UnitPrice:      price,
+				TaxClass:       tc.class,
+				TaxRateBp:      tc.rate,
+				LineVat:        zero,
+				LineGrossMinor: 15000,
+			}
+			o, err := NewOrder(
+				mustID(t, "55555555-5555-7555-8555-555555555555"),
+				mustID(t, sampleID), mustID(t, otherID),
+				[]OrderItemSnapshot{item}, price, now, now.Add(15*time.Minute),
+			)
+			if err != nil {
+				t.Fatalf("NewOrder: %v", err)
+			}
+			if o.TaxMinor() != 0 {
+				t.Fatalf("expected zero VAT for %s, got %d", tc.class, o.TaxMinor())
+			}
+			if o.TotalMinor() != 20000 {
+				t.Fatalf("expected total 20000, got %d", o.TotalMinor())
+			}
+		})
+	}
+}
+
 func TestOrder_StateTransitions(t *testing.T) {
 	o := mustNewOrder(t)
 

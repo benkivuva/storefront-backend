@@ -175,4 +175,37 @@ func TestE2E_EventingPipeline(t *testing.T) {
 	if processedCount != 1 {
 		t.Fatalf("expected 1 processed event, got %d", processedCount)
 	}
+
+	// Replaying an already-consumed window must be a no-op at the side-effect
+	// boundary: the event is republished, but processed_events dedupes it and
+	// the customer does not receive a second email.
+	var eventAt time.Time
+	if err := s.Pool.QueryRow(ctx, `SELECT created_at FROM outbox_events WHERE event_type = 'OrderCreated' ORDER BY created_at DESC LIMIT 1`).Scan(&eventAt); err != nil {
+		t.Fatalf("read event timestamp: %v", err)
+	}
+	replay := service.NewReplayService(outboxRepo, publisher)
+	republished, err := replay.Replay(ctx, eventAt.Add(-time.Second), eventAt.Add(time.Second))
+	if err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+	if republished == 0 {
+		t.Fatal("expected replay to republish the published event")
+	}
+
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case msg := <-mailCh:
+			if msg.To == custEmail {
+				t.Fatalf("replay sent a duplicate email to %s", custEmail)
+			}
+		case <-time.After(25 * time.Millisecond):
+		}
+	}
+
+	var afterReplay int
+	_ = s.Pool.QueryRow(ctx, `SELECT count(*) FROM processed_events WHERE consumer = 'e2e-group'`).Scan(&afterReplay)
+	if afterReplay != 1 {
+		t.Fatalf("expected replay to be a no-op, processed count = %d", afterReplay)
+	}
 }
