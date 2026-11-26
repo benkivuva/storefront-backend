@@ -49,7 +49,7 @@ func FromOrder(o *domain.Order) Order {
 	}
 	return Order{
 		ID:               o.ID().String(),
-		OrderNumber:      0, // Will be populated from DB sequence later
+		OrderNumber:      o.OrderNumber(),
 		Status:           string(o.Status()),
 		SubtotalMinor:    o.SubtotalMinor(),
 		TaxMinor:         o.TaxMinor(),

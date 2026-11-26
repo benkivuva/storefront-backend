@@ -17,7 +17,8 @@ import (
 	httpsrv "github.com/benkivuva/storefront-backend/internal/adapter/http"
 	"github.com/benkivuva/storefront-backend/internal/adapter/http/handlers"
 	"github.com/benkivuva/storefront-backend/internal/adapter/http/middleware"
-	"github.com/benkivuva/storefront-backend/internal/adapter/payments/mock"
+	"github.com/benkivuva/storefront-backend/internal/adapter/metrics"
+	"github.com/benkivuva/storefront-backend/internal/adapter/payments"
 	"github.com/benkivuva/storefront-backend/internal/adapter/postgres"
 	adapterredis "github.com/benkivuva/storefront-backend/internal/adapter/redis"
 	"github.com/benkivuva/storefront-backend/internal/config"
@@ -148,7 +149,10 @@ func run() error {
 	// --- Sprint 6: Payments Wiring ---
 	paymentRepo := postgres.NewPaymentRepo(pool)
 	webhookRepo := postgres.NewWebhookRepo(pool, idgen.New())
-	paymentProvider := mock.NewProvider()
+	paymentProvider, err := payments.New(cfg.PaymentProvider)
+	if err != nil {
+		return fmt.Errorf("payment provider: %w", err)
+	}
 	// ---
 
 	hasher := hashingadapter.NewHasher(hashing.DefaultParams())
@@ -157,6 +161,7 @@ func run() error {
 	gen := idgen.New()
 
 	cache := adapterredis.NewCache(cacheClient, "storefront")
+	cache.SetObserver(metrics.NewCacheObserver())
 
 	catalogSvc := service.NewCatalogService(productRepo, categoryRepo, inventoryRepo, outboxRepo, auditLog, cache, gen, clk)
 	authSvc, err := service.NewAuthService(
@@ -170,7 +175,7 @@ func run() error {
 
 	cartSvc := service.NewCartService(cartRepo, productRepo, gen, clk)
 	checkoutSvc := service.NewCheckoutService(cartRepo, productRepo, addressRepo, checkoutRepo, gen, clk)
-	orderSvc := service.NewOrderService(orderRepo)
+	orderSvc := service.NewOrderService(orderRepo, clk)
 
 	// --- Sprint 6: Payment Service Wiring ---
 	paymentSvc := service.NewPaymentService(orderRepo, paymentRepo, paymentProvider, gen, clk)

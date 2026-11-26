@@ -3,10 +3,12 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/benkivuva/storefront-backend/internal/domain"
@@ -35,7 +37,37 @@ type orderCreatedEvent struct {
 	TraceContext     string    `json:"trace_context,omitempty"`
 }
 
+const maxSerializationAttempts = 3
+
+// Execute runs the checkout transaction, retrying serialization failures and
+// deadlocks with bounded backoff. PostgreSQL may abort either error class under
+// concurrent stock updates; both are safe to replay because the whole
+// transaction rolls back.
 func (r *CheckoutRepo) Execute(ctx context.Context, cartID domain.ID, o *domain.Order, idempotencyKey string) error {
+	var err error
+	for attempt := 0; attempt < maxSerializationAttempts; attempt++ {
+		err = r.executeOnce(ctx, cartID, o, idempotencyKey)
+		if err == nil || !isRetryableTxError(err) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Duration(attempt+1) * 10 * time.Millisecond):
+		}
+	}
+	return err
+}
+
+func isRetryableTxError(err error) bool {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return false
+	}
+	return pgErr.Code == "40001" || pgErr.Code == "40P01"
+}
+
+func (r *CheckoutRepo) executeOnce(ctx context.Context, cartID domain.ID, o *domain.Order, idempotencyKey string) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("checkout tx begin: %w", err)
@@ -47,19 +79,22 @@ func (r *CheckoutRepo) Execute(ctx context.Context, cartID domain.ID, o *domain.
 		return domain.ErrConflict
 	}
 
-	_, err = tx.Exec(ctx, `
+	var orderNumber int64
+	err = tx.QueryRow(ctx, `
 INSERT INTO orders (
 id, user_id, shipping_address_id, status,
 subtotal_minor, delivery_fee_minor, tax_minor, total_minor,
 currency, payment_expires_at, idempotency_key, created_at, updated_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+RETURNING order_number`,
 		toUUID(o.ID()), toUUID(o.UserID()), toUUID(o.AddressID()), string(o.Status()),
 		o.SubtotalMinor(), o.DeliveryFee().AmountMinor(), o.TaxMinor(), o.TotalMinor(),
 		string(o.DeliveryFee().Currency()), o.PaymentExpiresAt(), idempotencyKey,
-		o.CreatedAt(), o.UpdatedAt())
+		o.CreatedAt(), o.UpdatedAt()).Scan(&orderNumber)
 	if err != nil {
 		return fmt.Errorf("order insert: %w", err)
 	}
+	o.SetOrderNumber(orderNumber)
 
 	items := o.Items()
 	sort.Slice(items, func(i, j int) bool {

@@ -14,6 +14,7 @@ import (
 type OrderService interface {
 	ListOrders(ctx context.Context, userID domain.ID) ([]*domain.Order, error)
 	GetOrder(ctx context.Context, userID, orderID domain.ID) (*domain.Order, error)
+	CancelOrder(ctx context.Context, userID, orderID domain.ID) (*domain.Order, error)
 }
 
 type OrderHandler struct {
@@ -58,6 +59,27 @@ func (h *OrderHandler) GetOrder(w http.ResponseWriter, r *http.Request) {
 	}
 
 	o, err := h.svc.GetOrder(r.Context(), u.UserID, id)
+	if err != nil {
+		dto.WriteError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, dto.FromOrder(o))
+}
+
+func (h *OrderHandler) CancelOrder(w http.ResponseWriter, r *http.Request) {
+	u, ok := middleware.UserFrom(r.Context())
+	if !ok {
+		dto.WriteProblem(w, http.StatusUnauthorized, "UNAUTHORIZED", "authentication required")
+		return
+	}
+
+	id, err := domain.ParseID(chi.URLParam(r, "id"))
+	if err != nil {
+		dto.WriteProblem(w, http.StatusBadRequest, "INVALID_ID", "invalid order id")
+		return
+	}
+
+	o, err := h.svc.CancelOrder(r.Context(), u.UserID, id)
 	if err != nil {
 		dto.WriteError(w, err)
 		return

@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -34,23 +35,26 @@ func (r *OrderRepo) Create(ctx context.Context, o *domain.Order, idempotencyKey 
 		addrID = toUUID(o.AddressID())
 	}
 
-	_, err = tx.Exec(ctx, `
+	var orderNumber int64
+	err = tx.QueryRow(ctx, `
 INSERT INTO orders (
 id, user_id, shipping_address_id, status,
 subtotal_minor, delivery_fee_minor, tax_minor, total_minor,
 currency, payment_expires_at, idempotency_key,
 created_at, updated_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+RETURNING order_number`,
 		toUUID(o.ID()), toUUID(o.UserID()), addrID, string(o.Status()),
 		o.SubtotalMinor(), o.DeliveryFee().AmountMinor(), o.TaxMinor(), o.TotalMinor(),
 		string(o.DeliveryFee().Currency()), o.PaymentExpiresAt(), idempotencyKey,
-		o.CreatedAt(), o.UpdatedAt())
+		o.CreatedAt(), o.UpdatedAt()).Scan(&orderNumber)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return domain.ErrConflict
 		}
 		return fmt.Errorf("order insert: %w", err)
 	}
+	o.SetOrderNumber(orderNumber)
 
 	for _, item := range o.Items() {
 		_, err = tx.Exec(ctx, `
@@ -202,6 +206,97 @@ VALUES ($1, $2, $3, $4, $5, $6)`,
 		toUUID(o.ID()), string(latest.From), string(latest.To), latest.Actor, latest.Reason, latest.At)
 	if err != nil {
 		return fmt.Errorf("order history insert: %w", err)
+	}
+
+	return tx.Commit(ctx)
+}
+
+// Cancel transitions the order to CANCELLED, releases every reserved unit,
+// expires any open payment, records the stock ledger and outbox event, and
+// appends status history — all in one transaction.
+func (r *OrderRepo) Cancel(ctx context.Context, o *domain.Order) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("order cancel tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	tag, err := tx.Exec(ctx, `
+UPDATE orders SET status = $2, updated_at = $3
+WHERE id = $1 AND status = 'PENDING_PAYMENT'`,
+		toUUID(o.ID()), string(o.Status()), o.UpdatedAt())
+	if err != nil {
+		return fmt.Errorf("order cancel update: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.ErrConflict
+	}
+
+	rows, err := tx.Query(ctx, `SELECT product_id, quantity FROM order_items WHERE order_id = $1`, toUUID(o.ID()))
+	if err != nil {
+		return fmt.Errorf("order cancel items: %w", err)
+	}
+	type line struct {
+		productID domain.ID
+		qty       int
+	}
+	var lines []line
+	for rows.Next() {
+		var pid pgtype.UUID
+		var qty int
+		if err := rows.Scan(&pid, &qty); err != nil {
+			rows.Close()
+			return fmt.Errorf("order cancel item scan: %w", err)
+		}
+		lines = append(lines, line{productID: fromUUID(pid), qty: qty})
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("order cancel items: %w", err)
+	}
+
+	for _, l := range lines {
+		if _, err := tx.Exec(ctx, `
+UPDATE inventory SET available = available + $2, updated_at = $3
+WHERE product_id = $1`, toUUID(l.productID), l.qty, o.UpdatedAt()); err != nil {
+			return fmt.Errorf("order cancel stock release: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+INSERT INTO stock_movements (id, product_id, delta, reason, order_id, created_at)
+VALUES ($1, $2, $3, 'ORDER_RELEASE', $4, $5)`,
+			toUUID(r.ids.NewID()), toUUID(l.productID), l.qty, toUUID(o.ID()), o.UpdatedAt()); err != nil {
+			return fmt.Errorf("order cancel movement: %w", err)
+		}
+	}
+
+	if _, err := tx.Exec(ctx, `
+UPDATE payments SET status = 'EXPIRED', updated_at = $2
+WHERE order_id = $1 AND status IN ('INITIATED', 'PENDING')`,
+		toUUID(o.ID()), o.UpdatedAt()); err != nil {
+		return fmt.Errorf("order cancel payments: %w", err)
+	}
+
+	hist := o.History()
+	if len(hist) == 0 {
+		return fmt.Errorf("order has no history")
+	}
+	latest := hist[len(hist)-1]
+	if _, err := tx.Exec(ctx, `
+INSERT INTO order_status_history (order_id, from_status, to_status, actor, reason, created_at)
+VALUES ($1, $2, $3, $4, $5, $6)`,
+		toUUID(o.ID()), string(latest.From), string(latest.To), latest.Actor, latest.Reason, latest.At); err != nil {
+		return fmt.Errorf("order cancel history: %w", err)
+	}
+
+	payload, _ := json.Marshal(map[string]any{
+		"order_id": o.ID().String(),
+		"reason":   "cancelled_by_customer",
+	})
+	if _, err := tx.Exec(ctx, `
+INSERT INTO outbox_events (event_id, aggregate_type, aggregate_id, event_type, payload, created_at)
+VALUES ($1, 'order', $2, 'OrderCancelled', $3, $4)`,
+		toUUID(r.ids.NewID()), toUUID(o.ID()), payload, o.UpdatedAt()); err != nil {
+		return fmt.Errorf("order cancel outbox: %w", err)
 	}
 
 	return tx.Commit(ctx)

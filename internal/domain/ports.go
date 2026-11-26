@@ -154,6 +154,7 @@ type OrderRepository interface {
 	Create(ctx context.Context, o *Order, idempotencyKey string) error
 	GetByID(ctx context.Context, id ID) (*Order, error)
 	UpdateStatus(ctx context.Context, o *Order) error
+	Cancel(ctx context.Context, o *Order) error
 	ListByUser(ctx context.Context, userID ID) ([]*Order, error)
 	ListExpiredPending(ctx context.Context, before time.Time, limit int) ([]*Order, error)
 }
