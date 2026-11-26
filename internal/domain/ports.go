@@ -129,6 +129,7 @@ type OutboxRepository interface {
 	Create(ctx context.Context, e OutboxEvent) error
 	FetchPending(ctx context.Context, limit int) ([]OutboxEvent, error)
 	MarkPublished(ctx context.Context, id ID) error
+	MarkRetry(ctx context.Context, id ID, reason string, nextAttemptAt time.Time) error
 	MarkDead(ctx context.Context, id ID, reason string) error
 	FetchPublishedInRange(ctx context.Context, from, to time.Time, limit int) ([]OutboxEvent, error)
 	DeletePublishedBefore(ctx context.Context, cutoff time.Time) (int64, error)

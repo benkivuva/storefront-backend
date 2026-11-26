@@ -18,6 +18,7 @@ var (
 type mockOutboxRepo struct {
 	pendingEvents []domain.OutboxEvent
 	publishedIDs  []domain.ID
+	retryIDs      []domain.ID
 	deadIDs       []domain.ID
 	fetchErr      error
 	markPubErr    error
@@ -38,6 +39,10 @@ func (m *mockOutboxRepo) MarkPublished(ctx context.Context, id domain.ID) error 
 		return m.markPubErr
 	}
 	m.publishedIDs = append(m.publishedIDs, id)
+	return nil
+}
+func (m *mockOutboxRepo) MarkRetry(ctx context.Context, id domain.ID, reason string, next time.Time) error {
+	m.retryIDs = append(m.retryIDs, id)
 	return nil
 }
 func (m *mockOutboxRepo) MarkDead(ctx context.Context, id domain.ID, reason string) error {
@@ -90,8 +95,24 @@ func TestOutboxRelay_ProcessBatch_Success(t *testing.T) {
 	}
 }
 
-func TestOutboxRelay_ProcessBatch_PublishFails_MarksDead(t *testing.T) {
-	evt1 := domain.OutboxEvent{ID: id1, EventType: "OrderCreated", Attempts: 3}
+func TestOutboxRelay_ProcessBatch_PublishFails_SchedulesRetry(t *testing.T) {
+	evt1 := domain.OutboxEvent{ID: id1, EventType: "OrderCreated", Attempts: 1}
+
+	repo := &mockOutboxRepo{pendingEvents: []domain.OutboxEvent{evt1}}
+	pub := &mockPublisher{fail: true}
+
+	relay := service.NewOutboxRelay(repo, pub)
+	if err := relay.ProcessBatch(context.Background(), 10); err != nil {
+		t.Fatalf("ProcessBatch: %v", err)
+	}
+
+	if len(repo.retryIDs) != 1 || len(repo.deadIDs) != 0 {
+		t.Fatalf("expected one retry and no dead letter, retries=%d dead=%d", len(repo.retryIDs), len(repo.deadIDs))
+	}
+}
+
+func TestOutboxRelay_ProcessBatch_ExhaustedAttempts_MarksDead(t *testing.T) {
+	evt1 := domain.OutboxEvent{ID: id1, EventType: "OrderCreated", Attempts: 4}
 
 	repo := &mockOutboxRepo{
 		pendingEvents: []domain.OutboxEvent{evt1},

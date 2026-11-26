@@ -35,7 +35,7 @@ func (r *OutboxRepo) FetchPending(ctx context.Context, limit int) ([]domain.Outb
 	rows, err := r.pool.Query(ctx, `
 SELECT event_id, aggregate_type, aggregate_id, event_type, payload, attempts, coalesce(last_error, ''), created_at, coalesce(trace_context::text, '')
 FROM outbox_events
-WHERE status = 'pending'
+WHERE status = 'pending' AND next_attempt_at <= now()
 ORDER BY id ASC
 LIMIT $1
 FOR UPDATE SKIP LOCKED`, limit)
@@ -111,6 +111,17 @@ SET status = 'published', published_at = now()
 WHERE event_id = $1`, toUUID(id))
 	if err != nil {
 		return fmt.Errorf("mark outbox published: %w", err)
+	}
+	return nil
+}
+
+func (r *OutboxRepo) MarkRetry(ctx context.Context, id domain.ID, reason string, nextAttemptAt time.Time) error {
+	_, err := r.pool.Exec(ctx, `
+UPDATE outbox_events
+SET attempts = attempts + 1, last_error = $2, next_attempt_at = $3
+WHERE event_id = $1 AND status = 'pending'`, toUUID(id), reason, nextAttemptAt)
+	if err != nil {
+		return fmt.Errorf("mark outbox retry: %w", err)
 	}
 	return nil
 }

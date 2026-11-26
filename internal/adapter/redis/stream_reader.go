@@ -113,6 +113,13 @@ func parseStreamMessages(redisMsgs []goredis.XMessage) []domain.StreamMessage {
 		payloadStr, _ := msg.Values["payload"].(string)
 		e.Payload = []byte(payloadStr)
 
+		e.TraceContext, _ = msg.Values["trace_context"].(string)
+		if ts, ok := msg.Values["created_at"].(string); ok {
+			if t, err := time.Parse(time.RFC3339Nano, ts); err == nil {
+				e.CreatedAt = t
+			}
+		}
+
 		msgs = append(msgs, domain.StreamMessage{
 			ID:    msg.ID,
 			Event: e,

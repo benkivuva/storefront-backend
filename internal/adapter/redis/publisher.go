@@ -25,18 +25,23 @@ func NewEventPublisher(client *goredis.Client, prefix string) *EventPublisher {
 func (p *EventPublisher) Publish(ctx context.Context, e domain.OutboxEvent) error {
 	streamKey := fmt.Sprintf("%s:%s", p.prefix, e.AggregateType)
 
+	values := map[string]interface{}{
+		"event_id":       e.ID.String(),
+		"event_type":     e.EventType,
+		"aggregate_type": e.AggregateType,
+		"aggregate_id":   e.AggregateID.String(),
+		"payload":        string(e.Payload),
+		"created_at":     e.CreatedAt.Format(time.RFC3339Nano),
+	}
+	if e.TraceContext != "" {
+		values["trace_context"] = e.TraceContext
+	}
+
 	args := &goredis.XAddArgs{
 		Stream: streamKey,
 		MaxLen: 100000,
 		Approx: true,
-		Values: map[string]interface{}{
-			"event_id":       e.ID.String(),
-			"event_type":     e.EventType,
-			"aggregate_type": e.AggregateType,
-			"aggregate_id":   e.AggregateID.String(),
-			"payload":        string(e.Payload),
-			"created_at":     e.CreatedAt.Format(time.RFC3339Nano),
-		},
+		Values: values,
 	}
 
 	if err := p.client.XAdd(ctx, args).Err(); err != nil {

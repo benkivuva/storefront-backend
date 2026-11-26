@@ -13,6 +13,10 @@ import (
 	"github.com/benkivuva/storefront-backend/internal/domain"
 )
 
+// Streams is the set of Redis streams whose depth and pending-entry count are
+// exported. Keep in sync with the relay/consumer stream naming.
+var Streams = []string{"events:order", "events:product", "events:payment", "events:dlq"}
+
 type Server struct {
 	outbox domain.OutboxRepository
 	rdb    *goredis.Client
@@ -20,6 +24,8 @@ type Server struct {
 
 	outboxOldestPending prometheus.Gauge
 	dlqDepth            prometheus.Gauge
+	streamLength        *prometheus.GaugeVec
+	streamPending       *prometheus.GaugeVec
 }
 
 func NewServer(outbox domain.OutboxRepository, rdb *goredis.Client, addr string) *Server {
@@ -35,8 +41,16 @@ func NewServer(outbox domain.OutboxRepository, rdb *goredis.Client, addr string)
 			Name: "dlq_depth",
 			Help: "Number of messages in the Dead Letter Queue",
 		}),
+		streamLength: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "redis_stream_length",
+			Help: "Number of entries in a Redis stream",
+		}, []string{"stream"}),
+		streamPending: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "redis_stream_pending",
+			Help: "Number of pending (unacked) entries in a Redis consumer group",
+		}, []string{"stream", "group"}),
 	}
-	prometheus.MustRegister(s.outboxOldestPending, s.dlqDepth)
+	prometheus.MustRegister(s.outboxOldestPending, s.dlqDepth, s.streamLength, s.streamPending)
 	return s
 }
 
@@ -76,8 +90,50 @@ func (s *Server) collect(ctx context.Context) {
 		s.outboxOldestPending.Set(0)
 	}
 
-	dlqLen, err := s.rdb.XLen(ctx, "events:dlq").Result()
-	if err == nil {
-		s.dlqDepth.Set(float64(dlqLen))
+	for _, stream := range Streams {
+		if length, err := s.rdb.XLen(ctx, stream).Result(); err == nil {
+			s.streamLength.WithLabelValues(stream).Set(float64(length))
+		}
+		if stream == "events:dlq" {
+			if length, err := s.rdb.XLen(ctx, stream).Result(); err == nil {
+				s.dlqDepth.Set(float64(length))
+			}
+			continue
+		}
+		pending, err := s.rdb.XPending(ctx, stream, "email-group").Result()
+		if err == nil && pending != nil {
+			s.streamPending.WithLabelValues(stream, "email-group").Set(float64(pending.Count))
+		}
 	}
 }
+
+// CacheObserver exports cache hit/miss counters so the cache-hit-ratio
+// dashboard has a real signal.
+type CacheObserver struct {
+	hits   prometheus.Counter
+	misses prometheus.Counter
+}
+
+func NewCacheObserver() *CacheObserver {
+	o := &CacheObserver{
+		hits: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "cache_hits_total",
+			Help: "Number of cache lookups served from Redis",
+		}),
+		misses: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "cache_misses_total",
+			Help: "Number of cache lookups that required a database fetch",
+		}),
+	}
+	for _, c := range []prometheus.Collector{o.hits, o.misses} {
+		if err := prometheus.Register(c); err != nil {
+			if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
+				slog.Warn("cache metric registration failed", "error", err)
+			}
+		}
+	}
+	return o
+}
+
+func (o *CacheObserver) Hit()  { o.hits.Inc() }
+func (o *CacheObserver) Miss() { o.misses.Inc() }
