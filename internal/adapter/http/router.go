@@ -46,11 +46,13 @@ func NewPublicRouter(cfg RouterConfig) chi.Router {
 	r := chi.NewRouter()
 
 	r.Use(middleware.RequestID())
+	r.Use(middleware.Tracing())
 	r.Use(middleware.SecurityHeaders(middleware.SecurityHeadersConfig{Prod: cfg.Prod}))
 	r.Use(middleware.CORS(cfg.AllowedOrigins, true))
 	r.Use(middleware.BodyLimit(defaultBodyLimit))
 
 	r.Route("/api/v1/auth", func(r chi.Router) {
+		r.Use(middleware.NoStore())
 		r.Use(middleware.BodyLimit(authBodyLimit))
 		r.Use(middleware.RateLimit(middleware.RateLimitConfig{
 			Limiter:  cfg.AuthLimiter,
@@ -69,6 +71,7 @@ func NewPublicRouter(cfg RouterConfig) chi.Router {
 	})
 
 	r.Route("/api/v1/me", func(r chi.Router) {
+		r.Use(middleware.NoStore())
 		r.Use(middleware.Auth(cfg.JWTVerifier))
 		r.Use(middleware.RequireRole())
 		r.Use(middleware.RateLimit(middleware.RateLimitConfig{
@@ -87,6 +90,7 @@ func NewPublicRouter(cfg RouterConfig) chi.Router {
 	})
 
 	r.Route("/api/v1/cart", func(r chi.Router) {
+		r.Use(middleware.NoStore())
 		r.Use(middleware.Auth(cfg.JWTVerifier))
 		r.Use(middleware.RequireRole())
 		r.Use(middleware.RateLimit(middleware.RateLimitConfig{
@@ -103,13 +107,22 @@ func NewPublicRouter(cfg RouterConfig) chi.Router {
 	})
 
 	r.Route("/api/v1/checkout", func(r chi.Router) {
+		r.Use(middleware.NoStore())
 		r.Use(middleware.Auth(cfg.JWTVerifier))
 		r.Use(middleware.RequireRole())
+		r.Use(middleware.RateLimit(middleware.RateLimitConfig{
+			Limiter:  cfg.GlobalLimiter,
+			Fallback: cfg.GlobalFallback,
+			Prefix:   "rl:checkout",
+			Capacity: cfg.GlobalCapacity,
+			Key:      middleware.AccountIPKey(cfg.TrustedProxies),
+		}))
 		r.Use(middleware.Idempotency(cfg.IdempotencyRepo))
 		r.Post("/", cfg.CheckoutHandler.Checkout)
 	})
 
 	r.Route("/api/v1/orders", func(r chi.Router) {
+		r.Use(middleware.NoStore())
 		r.Use(middleware.Auth(cfg.JWTVerifier))
 		r.Use(middleware.RequireRole())
 		r.Use(middleware.RateLimit(middleware.RateLimitConfig{
@@ -121,12 +134,21 @@ func NewPublicRouter(cfg RouterConfig) chi.Router {
 		}))
 		r.Get("/", cfg.OrderHandler.ListOrders)
 		r.Get("/{id}", cfg.OrderHandler.GetOrder)
+		r.Post("/{id}/cancel", cfg.OrderHandler.CancelOrder)
+		r.Get("/{id}/payments/status", cfg.PaymentHandler.GetStatus)
 
 		r.With(middleware.Idempotency(cfg.IdempotencyRepo)).
 			Post("/{id}/payments", cfg.PaymentHandler.InitiatePayment)
 	})
 
 	r.Route("/api/v1/webhooks", func(r chi.Router) {
+		r.Use(middleware.RateLimit(middleware.RateLimitConfig{
+			Limiter:  cfg.GlobalLimiter,
+			Fallback: cfg.GlobalFallback,
+			Prefix:   "rl:webhook",
+			Capacity: cfg.GlobalCapacity,
+			Key:      middleware.IPKey(cfg.TrustedProxies),
+		}))
 		r.Post("/mock", cfg.PaymentHandler.HandleWebhook)
 	})
 
@@ -153,14 +175,25 @@ func NewPublicRouter(cfg RouterConfig) chi.Router {
 		r.Get("/", cfg.CatalogHandler.ListCategories)
 	})
 
-	r.Route("/api/v1/admin/products", func(r chi.Router) {
+	r.Route("/api/v1/admin", func(r chi.Router) {
+		r.Use(middleware.NoStore())
 		r.Use(middleware.Auth(cfg.JWTVerifier))
 		r.Use(middleware.RequireRole(domain.RoleAdmin))
-		r.Post("/", cfg.CatalogHandler.CreateProduct)
-		r.Put("/{id}", cfg.CatalogHandler.UpdateProduct)
-		r.Delete("/{id}", cfg.CatalogHandler.DeleteProduct)
-		r.Post("/{id}/inventory", cfg.CatalogHandler.AdjustStock)
-		r.Get("/low-stock", cfg.CatalogHandler.ListLowStock)
+		r.Use(middleware.RateLimit(middleware.RateLimitConfig{
+			Limiter:  cfg.GlobalLimiter,
+			Fallback: cfg.GlobalFallback,
+			Prefix:   "rl:admin",
+			Capacity: cfg.GlobalCapacity,
+			Key:      middleware.AccountIPKey(cfg.TrustedProxies),
+		}))
+		r.Route("/products", func(r chi.Router) {
+			r.Post("/", cfg.CatalogHandler.CreateProduct)
+			r.Put("/{id}", cfg.CatalogHandler.UpdateProduct)
+			r.Delete("/{id}", cfg.CatalogHandler.DeleteProduct)
+			r.Post("/{id}/inventory", cfg.CatalogHandler.AdjustStock)
+			r.Get("/low-stock", cfg.CatalogHandler.ListLowStock)
+		})
+		r.Get("/payments/orphaned", cfg.PaymentHandler.ListOrphaned)
 	})
 
 	r.NotFound(func(w http.ResponseWriter, _ *http.Request) {

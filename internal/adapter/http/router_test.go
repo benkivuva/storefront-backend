@@ -255,6 +255,61 @@ func TestRouter_CORSPreflight_DisallowedOrigin_403(t *testing.T) {
 	}
 }
 
+// TestRouter_AuthzMatrix asserts that every protected route rejects anonymous
+// callers and that customer tokens cannot reach admin routes. Handlers are not
+// invoked because the middleware chain rejects first.
+func TestRouter_AuthzMatrix(t *testing.T) {
+	h := buildTestRouter(t, allowAllLimiter{})
+
+	protected := []struct{ method, path string }{
+		{"GET", "/api/v1/me"},
+		{"PATCH", "/api/v1/me"},
+		{"GET", "/api/v1/me/addresses"},
+		{"POST", "/api/v1/me/addresses"},
+		{"GET", "/api/v1/me/sessions"},
+		{"DELETE", "/api/v1/me/sessions/00000000-0000-7000-8000-000000000000"},
+		{"GET", "/api/v1/cart"},
+		{"POST", "/api/v1/cart/items"},
+		{"PATCH", "/api/v1/cart/items/00000000-0000-7000-8000-000000000000"},
+		{"DELETE", "/api/v1/cart/items/00000000-0000-7000-8000-000000000000"},
+		{"POST", "/api/v1/checkout"},
+		{"GET", "/api/v1/orders"},
+		{"GET", "/api/v1/orders/00000000-0000-7000-8000-000000000000"},
+		{"POST", "/api/v1/orders/00000000-0000-7000-8000-000000000000/cancel"},
+		{"POST", "/api/v1/orders/00000000-0000-7000-8000-000000000000/payments"},
+		{"GET", "/api/v1/orders/00000000-0000-7000-8000-000000000000/payments/status"},
+		{"POST", "/api/v1/admin/products"},
+		{"PUT", "/api/v1/admin/products/00000000-0000-7000-8000-000000000000"},
+		{"DELETE", "/api/v1/admin/products/00000000-0000-7000-8000-000000000000"},
+		{"POST", "/api/v1/admin/products/00000000-0000-7000-8000-000000000000/inventory"},
+		{"GET", "/api/v1/admin/products/low-stock"},
+		{"GET", "/api/v1/admin/payments/orphaned"},
+	}
+
+	for _, tc := range protected {
+		t.Run("anonymous "+tc.method+" "+tc.path, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, httptest.NewRequest(tc.method, tc.path, nil))
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("status = %d, want 401", rec.Code)
+			}
+		})
+	}
+
+	for _, tc := range protected[len(protected)-6:] {
+		t.Run("customer "+tc.method+" "+tc.path, func(t *testing.T) {
+			r := httptest.NewRequest(tc.method, tc.path, strings.NewReader(`{}`))
+			r.Header.Set("Authorization", "Bearer good")
+			r.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, r)
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, want 403", rec.Code)
+			}
+		})
+	}
+}
+
 func TestRouter_NotFound(t *testing.T) {
 	h := buildTestRouter(t, allowAllLimiter{})
 	rec := httptest.NewRecorder()
