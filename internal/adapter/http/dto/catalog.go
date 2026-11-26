@@ -7,16 +7,17 @@ import (
 )
 
 type Product struct {
-	ID          string    `json:"id"`
-	SKU         string    `json:"sku"`
-	Name        string    `json:"name"`
-	Description string    `json:"description,omitempty"`
-	CategoryID  string    `json:"category_id,omitempty"`
-	PriceMinor  int64     `json:"price_minor"`
-	Currency    string    `json:"currency"`
-	TaxClass    string    `json:"tax_class"`
-	Version     int       `json:"version"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID            string    `json:"id"`
+	SKU           string    `json:"sku"`
+	Name          string    `json:"name"`
+	Description   string    `json:"description,omitempty"`
+	CategoryID    string    `json:"category_id,omitempty"`
+	PriceMinor    int64     `json:"price_minor"`
+	Currency      string    `json:"currency"`
+	TaxClass      string    `json:"tax_class"`
+	EtimsItemCode string    `json:"etims_item_code,omitempty"`
+	Version       int       `json:"version"`
+	CreatedAt     time.Time `json:"created_at"`
 }
 
 func FromProduct(p domain.Product) Product {
@@ -25,16 +26,17 @@ func FromProduct(p domain.Product) Product {
 		catID = p.CategoryID().String()
 	}
 	return Product{
-		ID:          p.ID().String(),
-		SKU:         p.SKU(),
-		Name:        p.Name(),
-		Description: p.Description(),
-		CategoryID:  catID,
-		PriceMinor:  p.Price().AmountMinor(),
-		Currency:    string(p.Price().Currency()),
-		TaxClass:    string(p.TaxClass()),
-		Version:     p.Version(),
-		CreatedAt:   p.CreatedAt(),
+		ID:            p.ID().String(),
+		SKU:           p.SKU(),
+		Name:          p.Name(),
+		Description:   p.Description(),
+		CategoryID:    catID,
+		PriceMinor:    p.Price().AmountMinor(),
+		Currency:      string(p.Price().Currency()),
+		TaxClass:      string(p.TaxClass()),
+		EtimsItemCode: p.EtimsItemCode(),
+		Version:       p.Version(),
+		CreatedAt:     p.CreatedAt(),
 	}
 }
 

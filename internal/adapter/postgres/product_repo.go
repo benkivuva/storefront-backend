@@ -124,11 +124,25 @@ func (r *ProductRepo) List(ctx context.Context, f domain.ListFilters, limit int,
 		query += " AND id IN (SELECT product_id FROM inventory WHERE available > 0)"
 	}
 
-	if !cursor.IsZero() {
+	if !cursor.IsZero() && (f.Sort == "" || f.Sort == "newest") {
 		query += fmt.Sprintf(" AND created_at < $%d", argCount)
 		args = append(args, cursor)
 	}
-	query += fmt.Sprintf(" ORDER BY created_at DESC LIMIT %d", limit)
+
+	switch f.Sort {
+	case "price_asc":
+		query += " ORDER BY price_minor ASC, id ASC"
+	case "price_desc":
+		query += " ORDER BY price_minor DESC, id DESC"
+	case "name_asc":
+		query += " ORDER BY name ASC, id ASC"
+	default:
+		query += " ORDER BY created_at DESC, id DESC"
+	}
+	query += fmt.Sprintf(" LIMIT %d", limit)
+	if f.Offset > 0 && f.Sort != "" && f.Sort != "newest" {
+		query += fmt.Sprintf(" OFFSET %d", f.Offset)
+	}
 
 	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {

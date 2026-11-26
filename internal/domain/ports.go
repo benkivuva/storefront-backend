@@ -79,6 +79,8 @@ type ListFilters struct {
 	MinPrice   int64
 	MaxPrice   int64
 	InStock    bool
+	Sort       string // newest (default), price_asc, price_desc, name_asc
+	Offset     int    // used for non-time-ordered sorts
 }
 
 type ProductRepository interface {
@@ -100,9 +102,15 @@ type InventoryRepository interface {
 	ListLowStock(ctx context.Context) ([]Inventory, error)
 }
 
+type CacheObserver interface {
+	Hit()
+	Miss()
+}
+
 type Cache interface {
 	GetOrFetch(ctx context.Context, key string, ttl time.Duration, fetchFn func() ([]byte, error)) ([]byte, error)
 	Delete(ctx context.Context, keys ...string) error
+	DeletePrefix(ctx context.Context, prefix string) error
 }
 
 type OutboxEvent struct {

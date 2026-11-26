@@ -16,8 +16,8 @@ type CatalogService interface {
 	ListProducts(ctx context.Context, filters domain.ListFilters, limit int, cursor string) ([]domain.Product, error)
 	GetProduct(ctx context.Context, id domain.ID) (domain.Product, error)
 	ListCategories(ctx context.Context) ([]domain.Category, error)
-	CreateProduct(ctx context.Context, sku, name, desc string, catID domain.ID, price domain.Money, taxClass domain.TaxClass, actorID domain.ID, ip string) (domain.Product, error)
-	UpdateProduct(ctx context.Context, id domain.ID, name, desc string, catID domain.ID, price domain.Money, taxClass domain.TaxClass, expectedVersion int, actorID domain.ID, ip string) (domain.Product, error)
+	CreateProduct(ctx context.Context, sku, name, desc string, catID domain.ID, price domain.Money, taxClass domain.TaxClass, etimsCode string, actorID domain.ID, ip string) (domain.Product, error)
+	UpdateProduct(ctx context.Context, id domain.ID, name, desc string, catID domain.ID, price domain.Money, taxClass domain.TaxClass, etimsCode string, expectedVersion int, actorID domain.ID, ip string) (domain.Product, error)
 	DeleteProduct(ctx context.Context, id domain.ID, actorID domain.ID) error
 	AdjustStock(ctx context.Context, productID domain.ID, delta int, reason domain.StockReason) error
 	ListLowStock(ctx context.Context) ([]domain.Inventory, error)
@@ -44,6 +44,7 @@ func (h *CatalogHandler) ListProducts(w http.ResponseWriter, r *http.Request) {
 		CategoryID: r.URL.Query().Get("category"),
 		Query:      r.URL.Query().Get("q"),
 		InStock:    r.URL.Query().Get("in_stock") == "true",
+		Sort:       r.URL.Query().Get("sort"),
 	}
 	if minStr := r.URL.Query().Get("min_price"); minStr != "" {
 		filters.MinPrice, _ = strconv.ParseInt(minStr, 10, 64)
@@ -85,12 +86,13 @@ func (h *CatalogHandler) ListCategories(w http.ResponseWriter, r *http.Request) 
 }
 
 type createProductRequest struct {
-	SKU         string `json:"sku"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	CategoryID  string `json:"category_id"`
-	PriceMinor  int64  `json:"price_minor"`
-	TaxClass    string `json:"tax_class"`
+	SKU           string `json:"sku"`
+	Name          string `json:"name"`
+	Description   string `json:"description"`
+	CategoryID    string `json:"category_id"`
+	PriceMinor    int64  `json:"price_minor"`
+	TaxClass      string `json:"tax_class"`
+	EtimsItemCode string `json:"etims_item_code,omitempty"`
 }
 
 func (h *CatalogHandler) CreateProduct(w http.ResponseWriter, r *http.Request) {
@@ -118,7 +120,7 @@ func (h *CatalogHandler) CreateProduct(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	p, err := h.svc.CreateProduct(r.Context(), req.SKU, req.Name, req.Description, catID, price, domain.TaxClass(req.TaxClass), u.UserID, "")
+	p, err := h.svc.CreateProduct(r.Context(), req.SKU, req.Name, req.Description, catID, price, domain.TaxClass(req.TaxClass), req.EtimsItemCode, u.UserID, "")
 	if err != nil {
 		dto.WriteError(w, err)
 		return
@@ -127,11 +129,12 @@ func (h *CatalogHandler) CreateProduct(w http.ResponseWriter, r *http.Request) {
 }
 
 type updateProductRequest struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	CategoryID  string `json:"category_id"`
-	PriceMinor  int64  `json:"price_minor"`
-	TaxClass    string `json:"tax_class"`
+	Name          string `json:"name"`
+	Description   string `json:"description"`
+	CategoryID    string `json:"category_id"`
+	PriceMinor    int64  `json:"price_minor"`
+	TaxClass      string `json:"tax_class"`
+	EtimsItemCode string `json:"etims_item_code,omitempty"`
 }
 
 func (h *CatalogHandler) UpdateProduct(w http.ResponseWriter, r *http.Request) {
@@ -171,7 +174,7 @@ func (h *CatalogHandler) UpdateProduct(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	p, err := h.svc.UpdateProduct(r.Context(), id, req.Name, req.Description, catID, price, domain.TaxClass(req.TaxClass), version, u.UserID, "")
+	p, err := h.svc.UpdateProduct(r.Context(), id, req.Name, req.Description, catID, price, domain.TaxClass(req.TaxClass), req.EtimsItemCode, version, u.UserID, "")
 	if err != nil {
 		dto.WriteError(w, err)
 		return

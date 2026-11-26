@@ -3,10 +3,17 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/benkivuva/storefront-backend/internal/domain"
+)
+
+var (
+	ErrInvalidCursor = errors.New("service: invalid pagination cursor")
+	ErrInvalidSort   = errors.New("service: unsupported sort order")
 )
 
 type CatalogService struct {
@@ -83,9 +90,9 @@ func (s *CatalogService) ListCategories(ctx context.Context) ([]domain.Category,
 	return cats, nil
 }
 
-func (s *CatalogService) CreateProduct(ctx context.Context, sku, name, desc string, catID domain.ID, price domain.Money, taxClass domain.TaxClass, actorID domain.ID, ip string) (domain.Product, error) {
+func (s *CatalogService) CreateProduct(ctx context.Context, sku, name, desc string, catID domain.ID, price domain.Money, taxClass domain.TaxClass, etimsCode string, actorID domain.ID, ip string) (domain.Product, error) {
 	now := s.clock.Now()
-	p, err := domain.NewProduct(s.ids.NewID(), sku, name, desc, catID, price, taxClass, "", now)
+	p, err := domain.NewProduct(s.ids.NewID(), sku, name, desc, catID, price, taxClass, etimsCode, now)
 	if err != nil {
 		return domain.Product{}, err
 	}
@@ -112,10 +119,18 @@ func (s *CatalogService) CreateProduct(ctx context.Context, sku, name, desc stri
 		Actor: actorID, Action: "product_created", EntityType: "product", EntityID: p.ID().String(), At: now,
 	})
 
+	s.invalidateCatalog(ctx, p.ID())
 	return p, nil
 }
 
-func (s *CatalogService) UpdateProduct(ctx context.Context, id domain.ID, name, desc string, catID domain.ID, price domain.Money, taxClass domain.TaxClass, expectedVersion int, actorID domain.ID, ip string) (domain.Product, error) {
+// invalidateCatalog drops both the single-product entry and every list/search
+// page so an admin write is visible on the next read.
+func (s *CatalogService) invalidateCatalog(ctx context.Context, id domain.ID) {
+	_ = s.cache.Delete(ctx, "product:"+id.String())
+	_ = s.cache.DeletePrefix(ctx, "products:list:")
+}
+
+func (s *CatalogService) UpdateProduct(ctx context.Context, id domain.ID, name, desc string, catID domain.ID, price domain.Money, taxClass domain.TaxClass, etimsCode string, expectedVersion int, actorID domain.ID, ip string) (domain.Product, error) {
 	p, err := s.products.GetByID(ctx, id)
 	if err != nil {
 		return domain.Product{}, err
@@ -125,7 +140,7 @@ func (s *CatalogService) UpdateProduct(ctx context.Context, id domain.ID, name, 
 		return domain.Product{}, domain.ErrConflict
 	}
 
-	updated, err := p.UpdateDetails(name, desc, catID, price, taxClass, "", s.clock.Now())
+	updated, err := p.UpdateDetails(name, desc, catID, price, taxClass, etimsCode, s.clock.Now())
 	if err != nil {
 		return domain.Product{}, err
 	}
@@ -144,7 +159,7 @@ func (s *CatalogService) UpdateProduct(ctx context.Context, id domain.ID, name, 
 		Actor: actorID, Action: "product_updated", EntityType: "product", EntityID: updated.ID().String(), At: s.clock.Now(),
 	})
 
-	_ = s.cache.Delete(ctx, "product:"+id.String())
+	s.invalidateCatalog(ctx, id)
 	return updated, nil
 }
 
@@ -162,7 +177,7 @@ func (s *CatalogService) DeleteProduct(ctx context.Context, id domain.ID, actorI
 		Actor: actorID, Action: "product_deleted", EntityType: "product", EntityID: id.String(), At: s.clock.Now(),
 	})
 
-	_ = s.cache.Delete(ctx, "product:"+id.String())
+	s.invalidateCatalog(ctx, id)
 	return nil
 }
 
@@ -176,7 +191,7 @@ func (s *CatalogService) AdjustStock(ctx context.Context, productID domain.ID, d
 		return err
 	}
 
-	_ = s.cache.Delete(ctx, "product:"+productID.String())
+	s.invalidateCatalog(ctx, productID)
 	return nil
 }
 
@@ -185,16 +200,34 @@ func (s *CatalogService) ListLowStock(ctx context.Context) ([]domain.Inventory, 
 }
 
 func (s *CatalogService) ListProducts(ctx context.Context, filters domain.ListFilters, limit int, cursor string) ([]domain.Product, error) {
-	key := fmt.Sprintf("products:list:%s:%s:%d:%d:%t:%d:%s", filters.CategoryID, filters.Query, filters.MinPrice, filters.MaxPrice, filters.InStock, limit, cursor)
+	if filters.Sort == "" {
+		filters.Sort = "newest"
+	}
+	switch filters.Sort {
+	case "newest", "price_asc", "price_desc", "name_asc":
+	default:
+		return nil, fmt.Errorf("%w: %q", ErrInvalidSort, filters.Sort)
+	}
+
+	key := fmt.Sprintf("products:list:%s:%s:%d:%d:%t:%s:%d:%s",
+		filters.CategoryID, filters.Query, filters.MinPrice, filters.MaxPrice, filters.InStock, filters.Sort, limit, cursor)
 
 	data, err := s.cache.GetOrFetch(ctx, key, 60*time.Second, func() ([]byte, error) {
 		var cursorTime time.Time
 		if cursor != "" {
-			t, err := time.Parse(time.RFC3339, cursor)
-			if err != nil {
-				return nil, fmt.Errorf("invalid cursor: %w", err)
+			if filters.Sort == "newest" {
+				t, err := time.Parse(time.RFC3339, cursor)
+				if err != nil {
+					return nil, fmt.Errorf("%w: %v", ErrInvalidCursor, err)
+				}
+				cursorTime = t
+			} else {
+				offset, err := strconv.Atoi(cursor)
+				if err != nil || offset < 0 {
+					return nil, fmt.Errorf("%w: offset cursor must be a non-negative integer", ErrInvalidCursor)
+				}
+				filters.Offset = offset
 			}
-			cursorTime = t
 		}
 		ps, err := s.products.List(ctx, filters, limit, cursorTime)
 		if err != nil {
