@@ -1,0 +1,61 @@
+{
+  "title": "Storefront — Catalog Cache",
+  "uid": "storefront-cache",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Cache hit ratio",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(rate(cache_hits_total[5m])) / (sum(rate(cache_hits_total[5m])) + sum(rate(cache_misses_total[5m])))",
+          "legendFormat": "hit ratio"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 0.8 },
+              { "color": "green", "value": 0.95 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Hits and misses",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        { "expr": "sum(rate(cache_hits_total[5m]))", "legendFormat": "hits/s" },
+        { "expr": "sum(rate(cache_misses_total[5m]))", "legendFormat": "misses/s" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Redis stream depth",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        { "expr": "redis_stream_length", "legendFormat": "{{stream}}" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Consumer pending entries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        { "expr": "redis_stream_pending", "legendFormat": "{{stream}} / {{group}}" }
+      ]
+    }
+  ]
+}

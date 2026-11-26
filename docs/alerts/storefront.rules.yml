@@ -1,0 +1,73 @@
+groups:
+  - name: storefront-eventing
+    interval: 30s
+    rules:
+      - alert: OutboxBacklog
+        expr: outbox_oldest_pending_seconds > 60
+        for: 2m
+        labels:
+          severity: warning
+          service: storefront-worker
+        annotations:
+          summary: "Outbox relay is falling behind"
+          description: "The oldest pending outbox event is {{ $value | humanizeDuration }} old."
+          runbook: "docs/runbooks/outbox-backlog.md"
+
+      - alert: OutboxBacklogCritical
+        expr: outbox_oldest_pending_seconds > 300
+        for: 5m
+        labels:
+          severity: critical
+          service: storefront-worker
+        annotations:
+          summary: "Outbox relay is stalled"
+          runbook: "docs/runbooks/outbox-backlog.md"
+
+      - alert: DeadLetterQueueNotEmpty
+        expr: dlq_depth > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: storefront-worker
+        annotations:
+          summary: "Events are in the DLQ"
+          description: "dlq_depth is {{ $value }}."
+          runbook: "docs/runbooks/dlq-replay.md"
+
+      - alert: StreamPendingHigh
+        expr: redis_stream_pending > 1000
+        for: 10m
+        labels:
+          severity: warning
+          service: storefront-worker
+        annotations:
+          summary: "Consumer group has a large pending backlog"
+          description: "{{ $labels.stream }} / {{ $labels.group }} has {{ $value }} unacked entries."
+          runbook: "docs/runbooks/dlq-replay.md"
+
+  - name: storefront-cache
+    interval: 30s
+    rules:
+      - alert: CacheHitRatioLow
+        expr: |
+          sum(rate(cache_hits_total[5m]))
+            /
+          (sum(rate(cache_hits_total[5m])) + sum(rate(cache_misses_total[5m])))
+            < 0.8
+        for: 10m
+        labels:
+          severity: warning
+          service: storefront-api
+        annotations:
+          summary: "Catalog cache hit ratio is below 80%"
+          runbook: "docs/runbooks/cache.md"
+
+      - alert: CacheDown
+        expr: rate(cache_misses_total[5m]) > 0 and absent(rate(cache_hits_total[5m]))
+        for: 5m
+        labels:
+          severity: critical
+          service: storefront-api
+        annotations:
+          summary: "No cache hits are being recorded"
+          runbook: "docs/runbooks/cache.md"
