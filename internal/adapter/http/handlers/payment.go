@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 
@@ -14,6 +15,8 @@ import (
 
 type PaymentService interface {
 	InitiatePayment(ctx context.Context, userID, orderID domain.ID, method domain.PaymentMethod, customerPhone string) (domain.InitiateResult, error)
+	GetPaymentStatus(ctx context.Context, userID, orderID domain.ID) (*domain.Payment, error)
+	ListOrphanedPayments(ctx context.Context, limit int) ([]*domain.Payment, error)
 	ProcessWebhook(ctx context.Context, rawBody []byte, headers map[string]string) error
 }
 
@@ -51,13 +54,57 @@ func (h *PaymentHandler) InitiatePayment(w http.ResponseWriter, r *http.Request)
 	}
 
 	writeJSON(w, http.StatusAccepted, dto.InitiatePaymentResponse{
-		PaymentID: res.ProviderRef,
-		Status:    "PENDING",
+		PaymentID:         res.PaymentID.String(),
+		ProviderReference: res.ProviderRef,
+		Provider:          res.Provider,
+		Status:            "PENDING",
 		NextAction: dto.NextAction{
 			Type: res.NextAction.Type,
 			URL:  res.NextAction.URL,
 		},
 	})
+}
+
+func (h *PaymentHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
+	u, ok := middleware.UserFrom(r.Context())
+	if !ok {
+		dto.WriteProblem(w, http.StatusUnauthorized, "UNAUTHORIZED", "authentication required")
+		return
+	}
+
+	orderID, err := domain.ParseID(chi.URLParam(r, "id"))
+	if err != nil {
+		dto.WriteProblem(w, http.StatusBadRequest, "INVALID_ID", "invalid order id")
+		return
+	}
+
+	payment, err := h.svc.GetPaymentStatus(r.Context(), u.UserID, orderID)
+	if err != nil {
+		dto.WriteError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, dto.FromPayment(payment))
+}
+
+func (h *PaymentHandler) ListOrphaned(w http.ResponseWriter, r *http.Request) {
+	limit := 100
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if n, err := strconv.Atoi(l); err == nil && n > 0 && n <= 500 {
+			limit = n
+		}
+	}
+
+	payments, err := h.svc.ListOrphanedPayments(r.Context(), limit)
+	if err != nil {
+		dto.WriteError(w, err)
+		return
+	}
+
+	resp := make([]dto.PaymentStatus, len(payments))
+	for i, p := range payments {
+		resp[i] = dto.FromPayment(p)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"payments": resp})
 }
 
 func (h *PaymentHandler) HandleWebhook(w http.ResponseWriter, r *http.Request) {

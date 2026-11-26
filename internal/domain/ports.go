@@ -219,6 +219,8 @@ type NextAction struct {
 }
 
 type InitiateResult struct {
+	PaymentID   ID
+	Provider    string
 	ProviderRef string
 	NextAction  NextAction
 }
@@ -259,6 +261,7 @@ type PaymentRepository interface {
 	GetByID(ctx context.Context, id ID) (*Payment, error)
 	GetByProviderRef(ctx context.Context, provider, ref string) (*Payment, error)
 	GetLatestByOrderID(ctx context.Context, orderID ID) (*Payment, error)
+	ListByStatus(ctx context.Context, status PaymentStatus, limit int) ([]*Payment, error)
 	UpdateStatus(ctx context.Context, p *Payment) error
 }
 

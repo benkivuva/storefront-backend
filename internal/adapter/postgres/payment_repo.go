@@ -54,6 +54,26 @@ FROM payments WHERE order_id = $1 ORDER BY created_at DESC LIMIT 1`, toUUID(orde
 	return scanPayment(row)
 }
 
+func (r *PaymentRepo) ListByStatus(ctx context.Context, status domain.PaymentStatus, limit int) ([]*domain.Payment, error) {
+	rows, err := r.pool.Query(ctx, `
+SELECT id, order_id, provider, method, status, amount_minor, currency, coalesce(provider_ref, ''), coalesce(provider_txn_id, ''), coalesce(failure_reason, ''), created_at, updated_at
+FROM payments WHERE status = $1 ORDER BY created_at ASC LIMIT $2`, string(status), limit)
+	if err != nil {
+		return nil, fmt.Errorf("payment list by status: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*domain.Payment
+	for rows.Next() {
+		p, err := scanPayment(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
 func (r *PaymentRepo) UpdateStatus(ctx context.Context, p *domain.Payment) error {
 	_, err := r.pool.Exec(ctx, `
 UPDATE payments SET 

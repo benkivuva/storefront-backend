@@ -10,6 +10,13 @@ import (
 	"github.com/benkivuva/storefront-backend/internal/domain"
 )
 
+var (
+	ErrOrderNotPayable      = errors.New("service: order is not awaiting payment")
+	ErrOrderExpired         = errors.New("service: order payment window has expired")
+	ErrInvalidWebhook       = errors.New("service: invalid webhook payload")
+	ErrInvalidPaymentMethod = errors.New("service: unsupported payment method")
+)
+
 type PaymentService struct {
 	orders      domain.OrderRepository
 	payments    domain.PaymentRepository
@@ -49,13 +56,17 @@ func (s *PaymentService) InitiatePayment(ctx context.Context, userID, orderID do
 		return domain.InitiateResult{}, fmt.Errorf("%w: order does not belong to user", domain.ErrNotFound)
 	}
 
+	if err := validatePaymentMethod(method); err != nil {
+		return domain.InitiateResult{}, err
+	}
+
 	if order.Status() != domain.StatusPendingPayment {
-		return domain.InitiateResult{}, fmt.Errorf("order is not pending payment (current: %s)", order.Status())
+		return domain.InitiateResult{}, fmt.Errorf("%w: current status %s", ErrOrderNotPayable, order.Status())
 	}
 
 	now := s.clock.Now()
 	if now.After(order.PaymentExpiresAt()) {
-		return domain.InitiateResult{}, fmt.Errorf("order has expired")
+		return domain.InitiateResult{}, ErrOrderExpired
 	}
 
 	paymentID := s.ids.NewID()
@@ -75,7 +86,7 @@ func (s *PaymentService) InitiatePayment(ctx context.Context, userID, orderID do
 		Currency:      string(order.DeliveryFee().Currency()),
 		Method:        method,
 		CustomerPhone: customerPhone,
-		Reference:     order.ID().String(),
+		Reference:     payment.ID().String(),
 	}
 
 	result, err := s.provider.Initiate(ctx, req)
@@ -92,13 +103,24 @@ func (s *PaymentService) InitiatePayment(ctx context.Context, userID, orderID do
 		return domain.InitiateResult{}, fmt.Errorf("save pending payment: %w", err)
 	}
 
+	result.PaymentID = payment.ID()
+	result.Provider = s.provider.Name()
 	return result, nil
+}
+
+func validatePaymentMethod(method domain.PaymentMethod) error {
+	switch method {
+	case domain.MethodCard, domain.MethodMpesa, domain.MethodAirtelMoney:
+		return nil
+	default:
+		return fmt.Errorf("%w: %q", ErrInvalidPaymentMethod, method)
+	}
 }
 
 func (s *PaymentService) ProcessWebhook(ctx context.Context, rawBody []byte, headers map[string]string) error {
 	evt, err := s.provider.VerifyWebhook(ctx, rawBody, headers)
 	if err != nil {
-		return fmt.Errorf("verify webhook: %w", err)
+		return fmt.Errorf("%w: %v", ErrInvalidWebhook, err)
 	}
 
 	now := s.clock.Now()
@@ -126,10 +148,23 @@ func (s *PaymentService) ProcessWebhook(ctx context.Context, rawBody []byte, hea
 
 	payment, err := s.payments.GetByProviderRef(ctx, s.provider.Name(), evt.ProviderRef)
 	if err != nil {
-		if errors.Is(err, domain.ErrNotFound) {
-			return fmt.Errorf("payment not found for provider ref %s", evt.ProviderRef)
+		if !errors.Is(err, domain.ErrNotFound) {
+			return fmt.Errorf("fetch payment: %w", err)
 		}
-		return fmt.Errorf("fetch payment: %w", err)
+		// Some providers echo our internal payment id back as the reference.
+		// Accept it so callbacks keep working if a provider normalises refs.
+		id, parseErr := domain.ParseID(evt.ProviderRef)
+		if parseErr != nil {
+			return fmt.Errorf("%w: payment not found for reference %s", domain.ErrNotFound, evt.ProviderRef)
+		}
+		payment, err = s.payments.GetByID(ctx, id)
+		if err != nil {
+			return fmt.Errorf("fetch payment by id: %w", err)
+		}
+	}
+
+	if !evt.Status.IsValid() {
+		return fmt.Errorf("%w: unknown payment status %q", ErrInvalidWebhook, evt.Status)
 	}
 
 	if payment.Status() == domain.PaymentSucceeded {
@@ -196,6 +231,33 @@ func (s *PaymentService) ProcessWebhook(ctx context.Context, rawBody []byte, hea
 	}
 
 	return nil
+}
+
+// GetPaymentStatus returns the latest payment for an order owned by userID.
+// It is the polling endpoint the frontend uses while a payment is in flight.
+func (s *PaymentService) GetPaymentStatus(ctx context.Context, userID, orderID domain.ID) (*domain.Payment, error) {
+	order, err := s.orders.GetByID(ctx, orderID)
+	if err != nil {
+		return nil, err
+	}
+	if order.UserID() != userID {
+		return nil, fmt.Errorf("%w: order does not belong to user", domain.ErrNotFound)
+	}
+
+	payment, err := s.payments.GetLatestByOrderID(ctx, orderID)
+	if err != nil {
+		return nil, err
+	}
+	return payment, nil
+}
+
+// ListOrphanedPayments returns payments that arrived after their order was
+// cancelled or expired and need manual reconciliation.
+func (s *PaymentService) ListOrphanedPayments(ctx context.Context, limit int) ([]*domain.Payment, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	return s.payments.ListByStatus(ctx, domain.PaymentOrphaned, limit)
 }
 
 func (s *PaymentService) ReapExpiredOrders(ctx context.Context) (int, error) {

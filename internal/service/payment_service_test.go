@@ -24,6 +24,7 @@ func (m *mockOrderRepo) GetByID(ctx context.Context, id domain.ID) (*domain.Orde
 	return &m.order, nil
 }
 func (m *mockOrderRepo) UpdateStatus(ctx context.Context, o *domain.Order) error { return nil }
+func (m *mockOrderRepo) Cancel(ctx context.Context, o *domain.Order) error       { return nil }
 func (m *mockOrderRepo) ListByUser(ctx context.Context, userID domain.ID) ([]*domain.Order, error) {
 	return nil, nil
 }
@@ -57,6 +58,10 @@ func (m *mockPaymentRepo) GetByProviderRef(ctx context.Context, provider, ref st
 func (m *mockPaymentRepo) GetLatestByOrderID(ctx context.Context, orderID domain.ID) (*domain.Payment, error) {
 	return nil, nil
 }
+func (m *mockPaymentRepo) ListByStatus(ctx context.Context, status domain.PaymentStatus, limit int) ([]*domain.Payment, error) {
+	return nil, nil
+}
+
 func (m *mockPaymentRepo) UpdateStatus(ctx context.Context, p *domain.Payment) error {
 	m.updated = p
 	return nil

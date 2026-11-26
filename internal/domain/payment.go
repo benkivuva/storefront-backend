@@ -24,6 +24,15 @@ const (
 	PaymentRefunded  PaymentStatus = "REFUNDED"
 )
 
+func (s PaymentStatus) IsValid() bool {
+	switch s {
+	case PaymentInitiated, PaymentPending, PaymentSucceeded, PaymentFailed,
+		PaymentExpired, PaymentOrphaned, PaymentRefunded:
+		return true
+	}
+	return false
+}
+
 type PaymentMethod string
 
 const (
@@ -31,6 +40,14 @@ const (
 	MethodAirtelMoney PaymentMethod = "airtel_money"
 	MethodMpesa       PaymentMethod = "mpesa"
 )
+
+func (m PaymentMethod) IsValid() bool {
+	switch m {
+	case MethodCard, MethodAirtelMoney, MethodMpesa:
+		return true
+	}
+	return false
+}
 
 type Payment struct {
 	id            ID

@@ -15,7 +15,7 @@ import (
 
 	"github.com/benkivuva/storefront-backend/internal/adapter/mailer"
 	"github.com/benkivuva/storefront-backend/internal/adapter/metrics"
-	"github.com/benkivuva/storefront-backend/internal/adapter/payments/mock"
+	"github.com/benkivuva/storefront-backend/internal/adapter/payments"
 	"github.com/benkivuva/storefront-backend/internal/adapter/postgres"
 	adapterredis "github.com/benkivuva/storefront-backend/internal/adapter/redis"
 	"github.com/benkivuva/storefront-backend/internal/config"
@@ -80,7 +80,7 @@ func run() error {
 	case "cleanup":
 		err = runCleanup(ctx, pool)
 	case "reaper":
-		err = runReaper(ctx, pool)
+		err = runReaper(ctx, pool, cfg)
 	case "replay":
 		err = runReplay(ctx, pool, rdb)
 	default:
@@ -211,10 +211,13 @@ func runReplay(ctx context.Context, pool *pgxpool.Pool, rdb *goredis.Client) err
 	return nil
 }
 
-func runReaper(ctx context.Context, pool *pgxpool.Pool) error {
+func runReaper(ctx context.Context, pool *pgxpool.Pool, cfg *config.Config) error {
 	gen := idgen.New()
 	clk := clock.New()
-	prov := mock.NewProvider()
+	prov, err := payments.New(cfg.PaymentProvider)
+	if err != nil {
+		return fmt.Errorf("payment provider: %w", err)
+	}
 
 	orderRepo := postgres.NewOrderRepo(pool, gen)
 	paymentRepo := postgres.NewPaymentRepo(pool)

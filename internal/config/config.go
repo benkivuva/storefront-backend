@@ -66,6 +66,11 @@ type Config struct {
 
 	LockoutSchedule  string        `env:"LOCKOUT_SCHEDULE"   envDefault:"3:100ms,10:1m,20:15m"`
 	LockoutRecordTTL time.Duration `env:"LOCKOUT_RECORD_TTL" envDefault:"24h"`
+
+	// PaymentProvider selects the adapter from the provider registry.
+	// PaymentMode is "sandbox" or "live"; live refuses to start with the mock.
+	PaymentProvider string `env:"PAYMENT_PROVIDER" envDefault:"mock"`
+	PaymentMode     string `env:"PAYMENT_MODE"     envDefault:"sandbox"`
 }
 
 func Load() (*Config, error) {
@@ -160,6 +165,14 @@ func (c *Config) validate() error {
 	}
 	if _, err := c.ParseTrustedProxies(); err != nil {
 		return err
+	}
+	switch c.PaymentMode {
+	case "sandbox", "live":
+	default:
+		return fmt.Errorf("PAYMENT_MODE must be sandbox|live, got %q", c.PaymentMode)
+	}
+	if c.PaymentMode == "live" && c.PaymentProvider == "mock" {
+		return fmt.Errorf("PAYMENT_MODE=live cannot use the mock provider")
 	}
 	if c.IsStaging() || c.IsProduction() {
 		if c.DatabaseURL == "" {

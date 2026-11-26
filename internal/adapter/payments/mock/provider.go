@@ -50,13 +50,14 @@ func (p *Provider) VerifyWebhook(ctx context.Context, rawBody []byte, headers ma
 		Currency string `json:"currency"`
 		TxnID    string `json:"transaction_id"`
 		Failure  string `json:"failure_reason"`
+		Simulate string `json:"simulate"`
 	}
 
 	if err := json.Unmarshal(rawBody, &payload); err != nil {
 		return domain.WebhookEvent{}, fmt.Errorf("mock: invalid webhook payload: %w", err)
 	}
 
-	return domain.WebhookEvent{
+	evt := domain.WebhookEvent{
 		ProviderEventID: payload.EventID,
 		ProviderRef:     payload.Ref,
 		Status:          domain.PaymentStatus(payload.Status),
@@ -66,7 +67,24 @@ func (p *Provider) VerifyWebhook(ctx context.Context, rawBody []byte, headers ma
 		FailureReason:   payload.Failure,
 		RawPayload:      rawBody,
 		SignatureValid:  true,
-	}, nil
+	}
+
+	// Scripted failure modes for E2E tests. They are intentionally explicit
+	// rather than inferred from the reference so production callbacks can never
+	// trigger them.
+	switch payload.Simulate {
+	case "":
+	case "invalid_signature":
+		evt.SignatureValid = false
+	case "amount_mismatch":
+		evt.AmountMinor++
+	case "unknown_status":
+		evt.Status = domain.PaymentStatus("UNKNOWN")
+	default:
+		return domain.WebhookEvent{}, fmt.Errorf("mock: unknown simulate mode %q", payload.Simulate)
+	}
+
+	return evt, nil
 }
 
 func (p *Provider) Status(ctx context.Context, providerRef string) (domain.WebhookEvent, error) {
