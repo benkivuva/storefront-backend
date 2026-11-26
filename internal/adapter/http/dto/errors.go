@@ -44,6 +44,13 @@ var errorMappings = []struct {
 	{service.ErrAddressLimit, http.StatusConflict, "ADDRESS_LIMIT", "address limit reached"},
 	{service.ErrEmptyCart, http.StatusBadRequest, "EMPTY_CART", "cart is empty"},
 	{service.ErrPriceChanged, http.StatusConflict, "PRICE_CHANGED", "prices have changed"},
+	{service.ErrInvalidCursor, http.StatusBadRequest, "INVALID_CURSOR", "invalid pagination cursor"},
+	{service.ErrInvalidSort, http.StatusBadRequest, "INVALID_SORT", "unsupported sort order"},
+	{service.ErrOrderNotPayable, http.StatusConflict, "ORDER_NOT_PAYABLE", "order is not awaiting payment"},
+	{service.ErrOrderExpired, http.StatusConflict, "ORDER_EXPIRED", "order payment window has expired"},
+	{service.ErrOrderNotCancellable, http.StatusConflict, "ORDER_NOT_CANCELLABLE", "order can only be cancelled while awaiting payment"},
+	{service.ErrInvalidWebhook, http.StatusBadRequest, "INVALID_WEBHOOK", "invalid webhook payload"},
+	{service.ErrInvalidPaymentMethod, http.StatusBadRequest, "INVALID_PAYMENT_METHOD", "unsupported payment method"},
 
 	// Domain errors safe to expose
 	{domain.ErrNotFound, http.StatusNotFound, "NOT_FOUND", "resource not found"},
@@ -59,6 +66,34 @@ var errorMappings = []struct {
 	{domain.ErrPasswordTooShort, http.StatusBadRequest, "PASSWORD_TOO_SHORT", "password too short"},
 	{domain.ErrPasswordTooLong, http.StatusBadRequest, "PASSWORD_TOO_LONG", "password too long"},
 	{domain.ErrPasswordCommon, http.StatusBadRequest, "PASSWORD_TOO_COMMON", "password too common"},
+
+	// Cart and product validation
+	{domain.ErrInvalidQuantity, http.StatusBadRequest, "INVALID_QUANTITY", "quantity must be positive"},
+	{domain.ErrMaxQuantityExceeded, http.StatusBadRequest, "QUANTITY_LIMIT_EXCEEDED", "quantity exceeds the per-item limit"},
+	{domain.ErrItemNotFound, http.StatusNotFound, "ITEM_NOT_FOUND", "item not found in cart"},
+	{domain.ErrInvalidTaxClass, http.StatusBadRequest, "INVALID_TAX_CLASS", "invalid tax class"},
+	{domain.ErrEmptySKU, http.StatusBadRequest, "INVALID_SKU", "sku is required"},
+	{domain.ErrEmptyProductName, http.StatusBadRequest, "INVALID_PRODUCT_NAME", "product name is required"},
+
+	// Inventory
+	{domain.ErrNegativeStock, http.StatusConflict, "INSUFFICIENT_STOCK", "insufficient stock"},
+	{domain.ErrInvalidReason, http.StatusBadRequest, "INVALID_STOCK_REASON", "invalid stock movement reason"},
+
+	// Order and payment state
+	{domain.ErrInvalidStatus, http.StatusBadRequest, "INVALID_STATUS", "invalid status"},
+	{domain.ErrInvalidTransition, http.StatusConflict, "INVALID_TRANSITION", "illegal status transition"},
+	{domain.ErrEmptyOrderItems, http.StatusBadRequest, "EMPTY_ORDER", "order must contain at least one item"},
+	{domain.ErrPaymentNotFound, http.StatusNotFound, "PAYMENT_NOT_FOUND", "payment not found"},
+	{domain.ErrInvalidPaymentStatus, http.StatusConflict, "INVALID_PAYMENT_STATUS", "invalid payment status transition"},
+	{domain.ErrPaymentAlreadyOpen, http.StatusConflict, "PAYMENT_ALREADY_OPEN", "an open payment already exists for this order"},
+	{domain.ErrAmountMismatch, http.StatusConflict, "AMOUNT_MISMATCH", "payment amount does not match the order total"},
+
+	// Money and tax. ErrInvalidMoney is a programmer error (zero-value Money)
+	// and deliberately stays internal; the others can be caused by user input.
+	{domain.ErrInvalidCurrency, http.StatusBadRequest, "INVALID_CURRENCY", "unsupported currency"},
+	{domain.ErrNegativeAmount, http.StatusBadRequest, "INVALID_AMOUNT", "amount must be non-negative"},
+	{domain.ErrCurrencyMismatch, http.StatusBadRequest, "CURRENCY_MISMATCH", "currency mismatch"},
+	{domain.ErrInvalidRateBp, http.StatusBadRequest, "INVALID_TAX_RATE", "invalid tax rate"},
 }
 
 // FromError maps err to (status, code, title). Uses errors.Is, so wrapped
